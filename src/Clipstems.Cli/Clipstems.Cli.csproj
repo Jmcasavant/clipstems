@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Clipstems.Core\Clipstems.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>clipstems</AssemblyName>
+    <RootNamespace>Clipstems.Cli</RootNamespace>
+    
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Clipstems.App/Clipstems.App.csproj" />
+    <Project Path="src/Clipstems.Cli/Clipstems.Cli.csproj" />
+    <Project Path="src/Clipstems.Core/Clipstems.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Clipstems.Tests/Clipstems.Tests.csproj" />
+  </Folder>
+</Solution>

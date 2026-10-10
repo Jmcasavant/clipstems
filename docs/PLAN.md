@@ -1,7 +1,7 @@
-# Sidetrack plan
+# Clipstems plan
 
-Sidetrack adds separate audio tracks (mic, Discord, any app) to Steam Game
-Recording clips. Steam keeps doing the video; Sidetrack records the extra
+Clipstems adds separate audio tracks (mic, Discord, any app) to Steam Game
+Recording clips. Steam keeps doing the video; Clipstems records the extra
 audio alongside it and, when a clip is saved, writes a multi-track MP4 next
 to it. No OBS scene setup, no ads, no overlay of its own.
 
@@ -18,7 +18,7 @@ unless a source is named.
 - **No extension point.** `ISteamTimeline` lets games add markers; nothing
   lets a third party hook the recorder
   ([Steam Support FAQ](https://help.steampowered.com/en/faqs/view/23B7-49AD-4A28-9590)).
-  Sidetrack is a companion process that reads Steam's files, never writes them.
+  Clipstems is a companion process that reads Steam's files, never writes them.
 - **Layout.** A recordings root holds `gamerecording.pb`, `timelines/`,
   `video/bg_<appid>_<yyyyMMdd_HHmmss UTC>/` and `clips/clip_<appid>_<UTC>/`.
   A clip folder holds `clip.pb`, `timelines/`, and
@@ -39,19 +39,19 @@ unless a source is named.
 - **Manifest quirk.** Clip manifests carry a non-zero `Period start`;
   ffmpeg's DASH demuxer then reads only the first segment
   ([Pineapple exporter notes](https://github.com/BLumia/pineapple-steam-recording-exporter)).
-  Sidetrack rewrites a temp copy with `start="PT0S"` and an absolute
+  Clipstems rewrites a temp copy with `start="PT0S"` and an absolute
   `BaseURL`, which ffmpeg 9.0.1 reads in place.
 - **Clips carry lead-in footage.** Steam keeps whole 3 s segments, so a
   clip's media starts at the segment boundary before its logical start: the
   test clip's audio starts at 10374.008 s on the recording timeline, 2.84 s
   before its `Period start` of 10376.85 s, and holds 9 segments (27 s) for a
-  22.17 s clip. Sidetrack anchors sync on the first audio sample
+  22.17 s clip. Clipstems anchors sync on the first audio sample
   (`ffprobe` start time − `Period start` + metadata time) and declares the
   full on-disk duration in its manifest copy, because ffmpeg stops at the
   declared duration.
 - **Steam's own audio settings** live in the same `localconfig.vdf`:
   `Recording_Audio_Option` and `Audio_Mic` (here `"1"`: your mic is already
-  in Steam's mix). Sidetrack reads them and warns about a doubled mic.
+  in Steam's mix). Clipstems reads them and warns about a doubled mic.
 
 ## Capture
 
@@ -101,7 +101,7 @@ unless a source is named.
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| 1. Prototype (this change) | `Sidetrack.Core` + CLI: `doctor`, `clips`, `record`, `attach`, `watch`; unit tests | A real Steam clip gets mic + Discord tracks in sync, offset verified by correlation |
+| 1. Prototype (this change) | `Clipstems.Core` + CLI: `doctor`, `clips`, `record`, `attach`, `watch`; unit tests | A real Steam clip gets mic + Discord tracks in sync, offset verified by correlation |
 | 2. Daily driver | Tray app (WinUI 3 or WPF), settings UI, start with Windows, auto-start buffer when Steam runs a game (`RunningAppID`), game-only track via process loopback on the game's PID | Runs for a week of play with no manual step |
 | 3. Quality | Opus/FLAC buffer instead of WAV (~10× less disk), drift resampling instead of per-minute re-anchoring, device-change and app-restart handling, multi-segment clips | 2 h buffer of 3 tracks under 300 MB; no audible seams |
 | 4. Sharing | "Quick share" export that mixes selected tracks into one, per-track volume, MKV option, optional Steam Deck/Linux port on PipeWire | One click from clip to a share-ready file |
@@ -112,7 +112,7 @@ unless a source is named.
   can't do process loopback and drops packet QPC timestamps, which sync
   depends on.
 - **ffmpeg is an external dependency** found on PATH or set via
-  `SIDETRACK_FFMPEG`; phase 2 bundles it. Tested with Gyan's 9.0.1
+  `CLIPSTEMS_FFMPEG`; phase 2 bundles it. Tested with Gyan's 9.0.1
   essentials build (`winget install Gyan.FFmpeg.Essentials`).
 - **Read-only toward Steam.** No writes into Steam folders and no binary
   patching; `clip.pb` field numbers are re-checked by `doctor` against the

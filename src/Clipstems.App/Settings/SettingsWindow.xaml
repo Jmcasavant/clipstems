@@ -1,0 +1,212 @@
+<Window x:Class="Clipstems.App.Settings.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Clipstems.App.Settings"
+        Title="Clipstems"
+        Width="780" Height="660" MinWidth="620" MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="Visible" />
+    </Window.Resources>
+    <DockPanel Margin="20,12,20,16">
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Style="{StaticResource Hint}" Text="{Binding EngineStatus}" />
+            <TextBlock Text="Clipstems" FontSize="22" FontWeight="SemiBold" />
+        </DockPanel>
+        <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Issues}" Margin="0,0,0,4">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type local:IssueItem}">
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="{Binding Glyph}"
+                                       Foreground="{DynamicResource SystemFillColorCautionBrush}" Margin="0,2,10,0" VerticalAlignment="Top" />
+                            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                        </DockPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock DockPanel.Dock="Bottom" Style="{StaticResource Hint}" FontSize="12" Margin="0,8,0,0" Text="Changes save automatically." />
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,8,0,0"
+                Visibility="{Binding Message, Converter={x:Static local:Converters.NotEmpty}}">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        </Border>
+
+        <TabControl>
+            <TabItem Header="Tracks">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                    <StackPanel Margin="0,8,0,0">
+
+                        <DockPanel Margin="0,4,0,10">
+                            <Button DockPanel.Dock="Right" Content="Open saved clips" Command="{Binding OpenOutputFolderCommand}" Margin="12,0,0,0"
+                                    VerticalAlignment="Top" />
+                            <TextBlock Style="{StaticResource Hint}" Text="{Binding ClipSummary}" />
+                        </DockPanel>
+
+                        <ItemsControl ItemsSource="{Binding Tracks}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type local:TrackRowViewModel}">
+                                    <Border Style="{StaticResource Card}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="64" />
+                                                <ColumnDefinition Width="28" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Position}" Style="{StaticResource Hint}" Margin="0,7,0,0" VerticalAlignment="Top" />
+                                            <TextBlock Grid.Column="1" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="{Binding Glyph}" FontSize="16"
+                                                       Margin="0,8,0,0" VerticalAlignment="Top" />
+                                            <StackPanel Grid.Column="2" Margin="0,0,12,0">
+                                                <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Left" MinWidth="200" MaxWidth="320"
+                                                         AutomationProperties.Name="Track name" ToolTip="The track's name in your video editor"
+                                                         Visibility="{Binding IsEditable, Converter={StaticResource Visible}}" />
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Margin="0,7,0,0"
+                                                           Visibility="{Binding IsFromSteam, Converter={StaticResource Visible}}" />
+                                                <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" Margin="0,6,0,0"
+                                                          HorizontalAlignment="Stretch" MaxWidth="420"
+                                                          AutomationProperties.Name="{Binding Title, StringFormat='Device for {0}'}"
+                                                          Visibility="{Binding HasDeviceChoice, Converter={StaticResource Visible}}" />
+                                                <TextBlock Text="{Binding Description}" Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                                           Visibility="{Binding Description, Converter={x:Static local:Converters.NotEmpty}}" />
+                                                <TextBlock Text="{Binding Waiting}" Style="{StaticResource Hint}" Margin="0,4,0,0" FontSize="12"
+                                                           Visibility="{Binding Waiting, Converter={x:Static local:Converters.NotEmpty}}" />
+                                                <TextBlock Text="{Binding Problem}" Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12"
+                                                           Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                                           Visibility="{Binding Problem, Converter={x:Static local:Converters.NotEmpty}}" />
+                                                <TextBlock Text="{Binding TimingNote}" Style="{StaticResource Hint}" Margin="0,4,0,0" FontSize="12"
+                                                           Visibility="{Binding TimingNote, Converter={x:Static local:Converters.NotEmpty}}" />
+                                            </StackPanel>
+                                            <ProgressBar Grid.Column="3" Value="{Binding Level, Mode=OneWay}" Maximum="1" Height="6" Margin="0,13,12,0"
+                                                         VerticalAlignment="Top" AutomationProperties.Name="{Binding Title, StringFormat='Level of {0}'}" ToolTip="Level right now"
+                                                         Visibility="{Binding IsLive, Converter={StaticResource Visible}}" />
+                                            <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Top">
+                                                <CheckBox IsChecked="{Binding Enabled}" Content="On" MinWidth="0" Margin="0,4,0,0"
+                                                          AutomationProperties.Name="{Binding Title, StringFormat='Record {0}'}"
+                                                          Visibility="{Binding IsEditable, Converter={StaticResource Visible}}" />
+                                                <Button Margin="8,0,0,0" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Content="&#xE74D;"
+                                                        ToolTip="Remove this track" AutomationProperties.Name="{Binding Title, StringFormat='Remove {0}'}"
+                                                        Visibility="{Binding IsEditable, Converter={StaticResource Visible}}"
+                                                        Command="{Binding DataContext.RemoveTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <WrapPanel Margin="0,6,0,0">
+                            <Button Content="Add microphone" Command="{Binding AddMicrophoneCommand}" Margin="0,0,8,8" />
+                            <Button Content="Add app…" Click="OnAddApp" Margin="0,0,8,8" />
+                            <Button Content="Add game" Command="{Binding AddGameCommand}" Margin="0,0,8,8"
+                                    Visibility="{Binding HasGameTrack, Converter={x:Static local:Converters.Collapsed}}" />
+                            <Button Content="Add speakers or headset" Command="{Binding AddOutputDeviceCommand}" Margin="0,0,8,8"
+                                    ToolTip="Everything you hear on one output device" />
+                        </WrapPanel>
+
+                        <CheckBox IsChecked="{Binding MirrorSteamPrograms}" Margin="0,8,0,0"
+                                  Content="Give each program ticked in Steam's recording settings its own track" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Recording">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                <StackPanel Margin="0,8,0,0">
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="When to record" Margin="0,0,0,6" />
+                    <RadioButton IsChecked="{Binding RecordOnlyDuringGames}" Content="Only while a Steam game is running" GroupName="when" />
+                    <RadioButton IsChecked="{Binding RecordOnlyDuringGames, Converter={x:Static local:Converters.Not}}" Content="Always" GroupName="when" />
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                               Text="Like Steam's background recording, Clipstems records continuously and deletes audio older than the time below." />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Keep audio for" />
+                    <ComboBox ItemsSource="{Binding RetentionChoices}" SelectedItem="{Binding RetentionMinutes}"
+                              HorizontalAlignment="Left" MinWidth="160" AutomationProperties.Name="Keep audio for">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Converter={x:Static local:Converters.Minutes}}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                               Text="Set this at least as long as Steam's background recording, so clips from earlier in a session still get tracks." />
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0" Text="{Binding DiskEstimate}" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Save clips with tracks to" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="Open" Command="{Binding OpenOutputFolderCommand}" Margin="8,0,0,0" />
+                        <Button DockPanel.Dock="Right" Content="Browse…" Click="OnBrowseOutput" Margin="8,0,0,0" />
+                        <TextBox Text="{Binding OutputFolder}" AutomationProperties.Name="Save clips with tracks to" />
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                               Text="Steam's own clips stay where they are; Clipstems saves a copy with the extra tracks here." />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="General" />
+                    <CheckBox IsChecked="{Binding StartWithWindows}" Content="Start with Windows" />
+                    <TextBlock Style="{StaticResource Hint}" Margin="28,0,0,4" Text="Development builds don't register themselves."
+                               Visibility="{Binding IsDevelopmentBuild, Converter={StaticResource Visible}}" />
+                    <CheckBox IsChecked="{Binding Notifications}" Content="Show a notification when a clip gets its tracks" />
+                </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem AutomationProperties.Name="Steam">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Steam" />
+                        <Ellipse Width="6" Height="6" Margin="5,0,0,6" Fill="{DynamicResource SystemFillColorCautionBrush}"
+                                 ToolTip="A Steam setting is worth changing"
+                                 Visibility="{Binding SteamNeedsAttention, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                </TabItem.Header>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                <StackPanel Margin="0,8,0,0">
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,10"
+                               Text="Clipstems works with whatever Steam records. These Steam settings get the most out of it." />
+                    <ItemsControl ItemsSource="{Binding SteamChecks}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type local:SteamCheck}">
+                                <Border Style="{StaticResource Card}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Left" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="{Binding Glyph}"
+                                                   Margin="0,2,12,0" VerticalAlignment="Top" />
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Fix}" Style="{StaticResource Hint}" Margin="0,2,0,0"
+                                                       Visibility="{Binding Fix, Converter={x:Static local:Converters.NotEmpty}}" />
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0"
+                               Text="In Steam: Settings › Game Recording. Changes show up here within 30 seconds." />
+                    <Button Content="Open Steam settings" Command="{Binding OpenSteamSettingsCommand}" HorizontalAlignment="Left" Margin="0,12,0,0" />
+                </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="About">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                <StackPanel Margin="0,8,0,0">
+                    <TextBlock Style="{StaticResource SectionHeader}" Margin="0,0,0,6">
+                        <Run Text="Clipstems" /> <Run Text="{Binding Version, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock Style="{StaticResource Hint}" Text="Adds separate audio tracks to Steam Game Recording clips." />
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="ffmpeg" />
+                    <TextBlock Style="{StaticResource Hint}" Text="{Binding FfmpegStatus, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Files" />
+                    <WrapPanel>
+                        <Button Content="Open data folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" />
+                        <Button Content="Open logs" Command="{Binding OpenLogsCommand}" />
+                    </WrapPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0" Text="{Binding DataFolder, Mode=OneWay}" />
+                </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>
