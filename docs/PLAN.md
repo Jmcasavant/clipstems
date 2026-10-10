@@ -7,8 +7,9 @@ to it. No OBS scene setup, no ads, no overlay of its own.
 
 ## What Steam gives us
 
-All verified 2026-10-10 on this PC (Steam client, Windows 11 build 26300)
-unless a source is named.
+All verified 2026-10-10 on one PC (Steam client, Windows 11 build 26300)
+unless a source is named. Steam's file formats are undocumented and can
+change with any client update.
 
 - **One mixed audio track.** A clip's `session.mpd` lists one video
   AdaptationSet (HEVC, 3 s segments) and one audio AdaptationSet: AAC-LC
@@ -24,8 +25,7 @@ unless a source is named.
   A clip folder holds `clip.pb`, `timelines/`, and
   `video/bg_*/{session.mpd, init-stream{0,1}.m4s, chunk-stream{0,1}-NNNNN.m4s}`.
 - **Two roots.** The root is `BackgroundRecordPath` in
-  `userdata/<id>/config/localconfig.vdf` when set,
-  else `userdata/<id>/gamerecordings`. Clips made before a path change stay
+  `userdata/<id>/config/localconfig.vdf` when set, else `userdata/<id>/gamerecordings`. Clips made before a path change stay
   in the old root, so the watcher scans both.
 - **Clip timing (`clip.pb`, schemaless protobuf, field numbers observed):**
   - `1.3` timeline start, Unix seconds (equals `daterecorded` in the timeline JSON)
@@ -50,8 +50,9 @@ unless a source is named.
   full on-disk duration in its manifest copy, because ffmpeg stops at the
   declared duration.
 - **Steam's own audio settings** live in the same `localconfig.vdf`:
-  `Recording_Audio_Option` and `Audio_Mic` (here `"1"`: your mic is already
-  in Steam's mix). Clipstems reads them and warns about a doubled mic.
+  `Recording_Audio_Option`, `Audio_Mic` and `ExtraAudioSessions` (values in
+  [APP.md](APP.md)). Clipstems reads them to decide which tracks to record
+  and which ones Steam's mix can line up.
 
 ## Capture
 
@@ -61,9 +62,10 @@ unless a source is named.
   build 20348; treated as a runtime capability, not a version check
   ([Microsoft sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/)).
 - **Mic:** WASAPI shared capture on the default (or a named) input device.
-- **Sync reference:** WASAPI loopback of the default output device. It
-  contains whatever Steam heard, so it correlates with Steam's track. It is
-  not exported by default.
+- **Sync reference:** process loopback of everything except Clipstems
+  (exclude-tree mode on its own process), so it holds whatever Steam heard
+  on any output device and correlates with Steam's track. It is never
+  exported.
 - **One format everywhere:** shared mode with `AUTOCONVERTPCM`, 48 kHz,
   stereo, 16-bit, so every track mixes and muxes without resampling.
 - **Timestamps:** each packet's `pu64QPCPosition` (100 ns QPC units,
@@ -110,14 +112,17 @@ unless a source is named.
    160 kbps and titled. Track 1 is Steam's mix and the default track, so
    Discord, X and phones (first track only) still play a full mix.
 
-## Phases
+## Status
 
-| Phase | Delivers | Done when |
-|---|---|---|
-| 1. Prototype (this change) | `Clipstems.Core` + CLI: `doctor`, `clips`, `record`, `attach`, `watch`; unit tests | A real Steam clip gets mic + Discord tracks in sync, offset verified by correlation |
-| 2. Daily driver | Tray app (WinUI 3 or WPF), settings UI, start with Windows, auto-start buffer when Steam runs a game (`RunningAppID`), game-only track via process loopback on the game's PID | Runs for a week of play with no manual step |
-| 3. Quality | Opus/FLAC buffer instead of WAV (~10× less disk), drift resampling instead of per-minute re-anchoring, device-change and app-restart handling, multi-segment clips | 2 h buffer of 3 tracks under 300 MB; no audible seams |
-| 4. Sharing | "Quick share" export that mixes selected tracks into one, per-track volume, MKV option, optional Steam Deck/Linux port on PipeWire | One click from clip to a share-ready file |
+| Area | State |
+|---|---|
+| Engine, CLI, tests | Done |
+| Tray app: settings, start with Windows, records while a Steam game runs, game track, device changes | Done; not yet run for a week of play |
+| Opus buffer | Done (below) |
+| Installer with bundled ffmpeg | Not started ([APP.md](APP.md), milestone 3) |
+| Clips spanning several recordings | Refused with a notification |
+| Drift resampling instead of per-minute re-anchoring | Not started |
+| Mixdown "quick share", Linux/Steam Deck | Not planned yet |
 
 ## Decisions
 
@@ -125,16 +130,16 @@ unless a source is named.
   can't do process loopback and drops packet QPC timestamps, which sync
   depends on.
 - **ffmpeg is an external dependency** found on PATH or set via
-  `CLIPSTEMS_FFMPEG`; phase 2 bundles it. Tested with Gyan's 9.0.1
+  `CLIPSTEMS_FFMPEG`; the installer will bundle it. Tested with Gyan's 9.0.1
   essentials build (`winget install Gyan.FFmpeg.Essentials`).
 - **Read-only toward Steam.** No writes into Steam folders and no binary
   patching; `clip.pb` field numbers are re-checked by `doctor` against the
   manifest's `Period start` (the cross-check above), so a Steam format
   change surfaces as an explicit error.
-- **Prototype refuses** clips that span several bg segments or timelines,
+- **Refuses** clips that span several bg segments or timelines,
   rather than guessing.
 
-## Prototype results (verified 2026-10-10, on this PC)
+## Prototype results (verified 2026-10-10)
 
 - **Capture:** mic, default-output loopback and process loopback all record
   through the same WASAPI path. A 3 s tone played by one PowerShell process
@@ -143,7 +148,8 @@ unless a source is named.
 - **Cross-source timestamps:** the tone sat 6.5 ms earlier in the system
   track than packet timestamps predicted against the process-loopback track.
   That is below the ~20–45 ms where A/V offset is noticeable; a per-source
-  calibration belongs in phase 3 if it proves stable.
+  calibration is worth adding only if it proves stable. Per-track
+  refinement (below) now corrects this against Steam's audio.
 - **Sync on a real clip:** Steam's own audio from the WARDOGS clip, planted
   in a synthetic buffer 437.5 ms away from the metadata time, was recovered
   as +437.5 ms (correlation 0.76, next best 0.03, margin 22×).

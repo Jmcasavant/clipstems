@@ -1,7 +1,7 @@
-# Clipstems app design (phase 2)
+# Clipstems app design
 
-The tray app that replaces `clipstems watch`. Each section records a
-decision and why; vendor facts are as of 2026-10-10.
+The tray app, which runs the same engine as `clipstems watch`. Each section
+records a decision and why; vendor facts are as of 2026-10-10.
 
 ## What it splits out
 
@@ -89,12 +89,12 @@ differ in sound but still correlate.
 
 ## Milestones
 
-1. Engine in Core, CLI `watch` on top of it, tests. *(this change)*
-2. Tray app: icon/state, menu, notifications, settings window (general,
-   tracks with app/device pickers, Steam status, about), start with Windows,
-   single instance. *(this change)*
-3. Packaging: Velopack installer and updates (1.2.161 current), bundled
-   ffmpeg LGPL shared build run as a separate process with its license
-   and source link shipped in About; code signing decision.
-4. Compressed buffer: done (see PLAN.md, "Compressed buffer"). Next: clips
-   spanning several recordings; mixdown "quick share".
+1. Engine in Core, CLI `watch` on top of it, tests. *Done.*
+2. Tray app: icon/state, menu, notifications, settings window (tracks with
+   app/device pickers, recording, Steam status, about), start with Windows,
+   single instance. *Done.*
+3. Packaging: Velopack installer and updates, bundled ffmpeg LGPL shared
+   build run as a separate process with its license and source link shipped
+   in About; code signing decision. *Next.*
+4. Compressed buffer. *Done* (see PLAN.md, "Compressed buffer").
+5. Clips spanning several recordings; mixdown "quick share".
