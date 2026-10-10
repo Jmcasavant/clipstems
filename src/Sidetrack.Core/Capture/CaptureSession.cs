@@ -44,8 +44,8 @@ public sealed class CaptureSession : IDisposable
     public uint? ProcessId { get; private init; }
 
     /// <summary>
-    /// Opens <paramref name="source"/>. Returns null when an app source's
-    /// process is not running (nothing to capture yet), which is not an error.
+    /// Opens <paramref name="source"/>. Returns null when an app or game
+    /// source has no running process (nothing to capture yet), which is not an error.
     /// </summary>
     public static CaptureSession? Open(CaptureSource source)
     {
@@ -55,7 +55,7 @@ public sealed class CaptureSession : IDisposable
             case SourceKind.SystemOutput:
             {
                 var kind = source.Kind == SourceKind.Microphone ? DeviceKind.Input : DeviceKind.Output;
-                var device = AudioDevices.Resolve(kind, source.Target);
+                var device = AudioDevices.Resolve(kind, source.Device);
                 var iid = Wasapi.IidAudioClient;
                 Wasapi.Check(device.Activate(ref iid, Wasapi.ClsctxAll, IntPtr.Zero, out var client), "IMMDevice.Activate");
                 var name = AudioDevices.FriendlyName(device) ?? "unknown device";
@@ -64,15 +64,27 @@ public sealed class CaptureSession : IDisposable
             }
             case SourceKind.Application:
             {
-                var pid = source.ProcessId is { } fixedPid
-                    ? ProcessTree.IsAlive(fixedPid) ? fixedPid : null
-                    : ProcessTree.FindRoot(source.Target!);
-                if (pid is null) return null;
-                return new CaptureSession(ActivateProcessLoopback(pid.Value), loopback: true, $"app: {source.Target} (pid {pid})")
+                (uint Pid, string Exe)? target = source.ProcessId is { } fixedPid
+                    ? ProcessTree.IsAlive(fixedPid) ? (fixedPid, $"pid {fixedPid}") : null
+                    : ProcessTree.FindRoot(source.Apps);
+                if (target is not { } t) return null;
+                return new CaptureSession(ActivateProcessLoopback(t.Pid, include: true), loopback: true, $"{t.Exe} (pid {t.Pid})")
                 {
-                    ProcessId = pid,
+                    ProcessId = t.Pid,
                 };
             }
+            case SourceKind.SteamGame:
+            {
+                var game = Steam.SteamGames.Running(Steam.SteamInstall.FindSteamPath());
+                if (game?.InstallDirectory is not { } dir || ProcessTree.FindRootUnder(dir) is not { } root) return null;
+                return new CaptureSession(ActivateProcessLoopback(root.Pid, include: true), loopback: true, $"{game.Name}: {root.Exe} (pid {root.Pid})")
+                {
+                    ProcessId = root.Pid,
+                };
+            }
+            case SourceKind.AllExceptSelf:
+                return new CaptureSession(ActivateProcessLoopback((uint)Environment.ProcessId, include: false), loopback: true,
+                    "all apps except Sidetrack");
             default:
                 throw new ArgumentOutOfRangeException(nameof(source));
         }
@@ -86,7 +98,7 @@ public sealed class CaptureSession : IDisposable
     {
         try
         {
-            var client = ActivateProcessLoopback((uint)Environment.ProcessId);
+            var client = ActivateProcessLoopback((uint)Environment.ProcessId, include: true);
             Marshal.ReleaseComObject(client);
             error = null;
             return true;
@@ -151,7 +163,7 @@ public sealed class CaptureSession : IDisposable
         _ready.Dispose();
     }
 
-    private static IAudioClient ActivateProcessLoopback(uint processId)
+    private static IAudioClient ActivateProcessLoopback(uint processId, bool include)
     {
         // AUDIOCLIENT_ACTIVATION_PARAMS { ActivationType; { TargetProcessId; ProcessLoopbackMode } }
         IntPtr parameters = Marshal.AllocHGlobal(12);
@@ -160,7 +172,7 @@ public sealed class CaptureSession : IDisposable
         {
             Marshal.WriteInt32(parameters, 0, Wasapi.ActivationTypeProcessLoopback);
             Marshal.WriteInt32(parameters, 4, (int)processId);
-            Marshal.WriteInt32(parameters, 8, Wasapi.ProcessLoopbackIncludeTree);
+            Marshal.WriteInt32(parameters, 8, include ? Wasapi.ProcessLoopbackIncludeTree : Wasapi.ProcessLoopbackExcludeTree);
             // PROPVARIANT VT_BLOB { cbSize at +8, pBlobData at +16 }
             Marshal.StructureToPtr(new PropVariant { VarType = Wasapi.VtBlob, Value = 12, Value2 = parameters }, variant, false);
 

@@ -3,7 +3,9 @@ using Sidetrack.Cli;
 using Sidetrack.Core;
 using Sidetrack.Core.Buffer;
 using Sidetrack.Core.Capture;
+using Sidetrack.Core.Engine;
 using Sidetrack.Core.Media;
+using Sidetrack.Core.Settings;
 using Sidetrack.Core.Steam;
 
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
@@ -23,6 +25,7 @@ try
     {
         "doctor" => Commands.Doctor(),
         "devices" => Commands.Devices(),
+        "apps" => Commands.Apps(),
         "clips" => Commands.Clips(),
         "record" => await Commands.Record(cli, watch: false, cancel.Token),
         "watch" => await Commands.Record(cli, watch: true, cancel.Token),
@@ -45,14 +48,7 @@ namespace Sidetrack.Cli
 {
     internal static class Commands
     {
-        private const string ReferenceTrack = "system";
-
-        private static readonly (string Name, string Spec)[] DefaultTracks =
-        [
-            ("mic", "mic"),
-            ("discord", "app:Discord.exe"),
-            (ReferenceTrack, "system"),
-        ];
+        private const string ReferenceTrack = SidetrackEngine.ReferenceTrackId;
 
         public static int Help()
         {
@@ -61,16 +57,18 @@ namespace Sidetrack.Cli
 
                   sidetrack doctor                 check Steam, recording roots, ffmpeg, buffer, capture support
                   sidetrack devices                list audio input and output devices
+                  sidetrack apps                   list apps with audio sessions (for app: sources)
                   sidetrack clips                  list Steam clips and whether the buffer covers them
-                  sidetrack record [--track name=source]... [--retention-minutes 120] [--seconds N]
+                  sidetrack record [--track name=source]... [--when always|game] [--seconds N]
                                                    record tracks into the rolling buffer until Ctrl+C (or N seconds)
                   sidetrack watch  [same options as record] [--out dir]
                                                    record, and write a multi-track MP4 for each new Steam clip
-                  sidetrack attach <clip folder | latest> [--tracks a,b] [--ref system] [--out dir] [--keep-temp]
+                  sidetrack attach <clip folder | latest> [--tracks a,b] [--ref _reference] [--out dir] [--keep-temp]
                                                    write the multi-track MP4 for one clip
 
-                Sources: mic, mic:<device name part>, system, system:<device name part>, app:<exe name>, pid:<process id>
-                Default tracks: mic=mic, discord=app:Discord.exe, system=system (sync reference, not exported)
+                Sources: mic, mic:<device>, system, system:<device>, app:<exe>[|<exe>...], game, all, pid:<id>
+                Without --track, the tracks saved by the Sidetrack app are used (default: mic, voice chat).
+                A hidden sync reference (all apps except Sidetrack) is always recorded.
                 Environment: SIDETRACK_FFMPEG (path to ffmpeg.exe), SIDETRACK_BUFFER (buffer folder)
                 """);
             return 0;
@@ -111,10 +109,11 @@ namespace Sidetrack.Cli
                     Ok("account", user.AccountId);
                     var s = user.Settings;
                     Ok("background recording mode", s.BackgroundRecordMode ?? "(not set)");
-                    Ok("audio option (raw)", s.AudioOption ?? "(not set)");
-                    if (s.MicInMix == "1")
-                        Warn("microphone", "Steam already mixes your mic into its track. Turn off the microphone in Steam > Settings > Game Recording, or drop Sidetrack's mic track, so it is not heard twice.");
-                    else Ok("microphone", "not in Steam's mix");
+                    Ok("record audio from", s.AudioOptionDescription);
+                    Ok("programs in Steam's mix", s.ProgramsInMix.Count == 0 ? "none" : string.Join(", ", s.ProgramsInMix.Select(p => p.Label)));
+                    Ok("microphone in Steam's mix", s.MicInMix == "1" ? "yes (mic track lined up exactly)" : "no (mic track placed by clock)");
+                    var saved = SettingsStore.Default.Load(out _);
+                    Ok("Sidetrack tracks", string.Join(", ", SidetrackEngine.EffectiveTracks(saved, s).Select(t => $"{t.Title} ({t.Source})")));
                     var roots = user.RecordingRoots();
                     if (roots.Count == 0) Warn("recording roots", "none yet (record something with Steam first)");
                     foreach (var root in roots) Ok("recording root", root);
@@ -167,6 +166,13 @@ namespace Sidetrack.Cli
             return 0;
         }
 
+        public static int Apps()
+        {
+            foreach (var app in AudioSessions.List())
+                Console.WriteLine($"{(app.IsActive ? "playing" : "idle   ")}  {app.Exe,-28} {app.DisplayName}");
+            return 0;
+        }
+
         public static int Clips()
         {
             var (_, roots) = SteamRoots();
@@ -182,7 +188,7 @@ namespace Sidetrack.Cli
                 try
                 {
                     var clip = ClipInfo.Read(c.Directory);
-                    var covered = store.Tracks().Where(t => t != ReferenceTrack && Covers(store, t, clip)).ToList();
+                    var covered = store.Tracks().Where(t => !t.StartsWith('_') && Covers(store, t, clip)).ToList();
                     Console.WriteLine($"{c.Name}  {clip.CoarseStartUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}  {clip.DurationMs / 1000.0,6:0.0}s  " +
                                       $"{clip.Title ?? ""}  buffer: {(covered.Count == 0 ? "-" : string.Join(",", covered))}");
                 }
@@ -196,65 +202,51 @@ namespace Sidetrack.Cli
 
         public static async Task<int> Record(Args cli, bool watch, CancellationToken cancel)
         {
-            var tracks = TrackSpecs(cli);
-            var retention = TimeSpan.FromMinutes(cli.Int("--retention-minutes", 120));
-            var stopAt = cli.Value("--seconds") is null ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(cli.Int("--seconds", 1));
-            var store = new SegmentStore(SidetrackPaths.Buffer);
-            Directory.CreateDirectory(store.Root);
-
-            Ffmpeg? ffmpeg = null;
-            IReadOnlyList<string> roots = [];
-            ClipWatcher? watcher = null;
-            if (watch)
+            var saved = SettingsStore.Default.Load(out _);
+            var settings = SettingsFor(cli) with
             {
-                ffmpeg = Ffmpeg.Locate() ?? throw new UsageException("watch needs ffmpeg; install it or set SIDETRACK_FFMPEG.");
-                (_, roots) = SteamRoots();
-                watcher = new ClipWatcher(roots, SidetrackPaths.ProcessedLog);
-            }
+                RecordWhen = (cli.Value("--when") ?? "always") switch
+                {
+                    "always" => RecordPolicy.Always,
+                    "game" => RecordPolicy.WhileSteamGameRuns,
+                    var other => throw new UsageException($"--when {other}: use always or game."),
+                },
+                RetentionMinutes = cli.Int("--retention-minutes", saved.RetentionMinutes),
+                OutputFolder = cli.Value("--out") ?? saved.OutputFolder,
+            };
+            var stopAt = cli.Value("--seconds") is null ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(cli.Int("--seconds", 1));
 
-            var recorders = tracks.Select(t => new TrackRecorder(t.Name, t.Source, store)).ToList();
-            foreach (var r in recorders) r.Start();
-            Console.WriteLine($"Recording {string.Join(", ", tracks.Select(t => $"{t.Name} ({t.Source})"))} into {store.Root}");
-            if (watch) Console.WriteLine($"Watching for new clips in {string.Join(", ", roots)}");
+            await using var engine = new SidetrackEngine(settings, new EngineOptions { AutoAttach = watch });
+            engine.ClipFinished += (_, outcome) => Print(outcome);
+            engine.Start();
+            var steamSettings = SteamInstall.FindSteamPath() is { } steamPath && SteamInstall.ActiveUser(steamPath) is { } user
+                ? user.Settings : SteamRecordingSettings.Empty;
+            Console.WriteLine($"Tracks: {string.Join(", ", SidetrackEngine.EffectiveTracks(settings, steamSettings).Select(t => $"{t.Id} ({t.Source})"))}");
+            Console.WriteLine($"Buffer: {SidetrackPaths.Buffer}; recording {(settings.RecordWhen == RecordPolicy.Always ? "now" : "while a Steam game runs")}" +
+                              (watch ? $"; new clips go to {settings.EffectiveOutputFolder}" : ""));
             Console.WriteLine("Ctrl+C to stop.");
 
             var nextStatus = DateTime.UtcNow.AddSeconds(5);
-            var nextPrune = DateTime.UtcNow;
-            try
+            IReadOnlyList<EngineIssue> shownIssues = [];
+            while (!cancel.IsCancellationRequested && DateTime.UtcNow < stopAt)
             {
-                while (!cancel.IsCancellationRequested && DateTime.UtcNow < stopAt)
+                await Task.Delay(TimeSpan.FromSeconds(1), cancel).ContinueWith(_ => { });
+                if (!engine.Issues.SequenceEqual(shownIssues))
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(1), cancel).ContinueWith(_ => { });
-                    if (DateTime.UtcNow >= nextStatus)
-                    {
-                        nextStatus = DateTime.UtcNow.AddSeconds(15);
-                        foreach (var r in recorders)
-                        {
-                            var level = r.TakePeakDbfs() is { } db ? $"peak {db,4:0} dBFS" : "silent        ";
-                            Console.WriteLine($"  [{DateTime.Now:HH:mm:ss}] {r.Track,-8} {r.State,-13} {r.TotalFrames / 48000.0,6:0}s  {level}  {r.Detail}");
-                        }
-                    }
-                    if (DateTime.UtcNow >= nextPrune)
-                    {
-                        nextPrune = DateTime.UtcNow.AddMinutes(1);
-                        store.Prune(DateTime.UtcNow.Ticks - retention.Ticks);
-                    }
-                    if (watcher is not null)
-                    {
-                        foreach (var clipDir in watcher.ReadyClips())
-                        {
-                            var options = AttachOptionsFor(cli, tracks);
-                            await AttachOne(new ClipAttacher(store, ffmpeg!), clipDir, options, cancel);
-                            watcher.MarkProcessed(clipDir);
-                        }
-                    }
+                    shownIssues = engine.Issues;
+                    foreach (var issue in shownIssues)
+                        Console.WriteLine($"  {(issue.Severity == IssueSeverity.Problem ? "PROBLEM" : "warning")}: {issue.Message}");
+                }
+                if (DateTime.UtcNow < nextStatus) continue;
+                nextStatus = DateTime.UtcNow.AddSeconds(15);
+                Console.WriteLine($"  [{DateTime.Now:HH:mm:ss}] {engine.Status}{(engine.Game is { } g ? $" ({g.Name})" : "")}");
+                foreach (var t in engine.Tracks)
+                {
+                    var level = t.PeakDbfs is { } db ? $"peak {db,4:0} dBFS" : "silent        ";
+                    Console.WriteLine($"      {t.Id,-8} {t.State,-10} {level}  {t.Detail}");
                 }
             }
-            finally
-            {
-                foreach (var r in recorders) r.Dispose();
-                Console.WriteLine("Stopped.");
-            }
+            Console.WriteLine("Stopping.");
             return 0;
         }
 
@@ -270,28 +262,23 @@ namespace Sidetrack.Cli
 
             var ffmpeg = Ffmpeg.Locate() ?? throw new UsageException("attach needs ffmpeg; install it or set SIDETRACK_FFMPEG.");
             var store = new SegmentStore(SidetrackPaths.Buffer);
-            var options = AttachOptionsFor(cli, TrackSpecs(cli));
-            var result = await AttachOne(new ClipAttacher(store, ffmpeg), target, options, cancel);
+            var options = AttachOptionsFor(cli, SettingsFor(cli));
+            var clip = ClipInfo.Read(target);
+            Console.WriteLine($"Clip {clip.Name} ({clip.Title}), {clip.DurationMs / 1000.0:0.0} s, starts {clip.CoarseStartUtc.ToLocalTime():HH:mm:ss.fff} per Steam");
+            AttachResult result;
+            try { result = await new ClipAttacher(store, ffmpeg).AttachAsync(clip, options, cancel); }
+            catch (FfmpegException ex) { result = new AttachResult(AttachStatus.Refused, ex.Message); }
+            Print(new ClipOutcome(target, clip.Title, result, DateTime.UtcNow));
             return result.Status == AttachStatus.Written ? 0 : 1;
         }
 
-        private static async Task<AttachResult> AttachOne(ClipAttacher attacher, string clipDir, AttachOptions options, CancellationToken cancel)
+        private static void Print(ClipOutcome outcome)
         {
-            var clip = ClipInfo.Read(clipDir);
-            Console.WriteLine($"Clip {clip.Name} ({clip.Title}), {clip.DurationMs / 1000.0:0.0} s, starts {clip.CoarseStartUtc.ToLocalTime():HH:mm:ss.fff} per Steam");
-            AttachResult result;
-            try
-            {
-                result = await attacher.AttachAsync(clip, options, cancel);
-            }
-            catch (FfmpegException ex)
-            {
-                Console.WriteLine($"  failed: {ex.Message}");
-                return new AttachResult(AttachStatus.Refused, ex.Message);
-            }
+            var result = outcome.Result;
+            Console.WriteLine($"Clip {outcome.ClipName} ({outcome.Title})");
             Console.WriteLine($"  {result.Status}: {result.Message}");
             if (result.Correlation is { } c)
-                Console.WriteLine($"  correlation {c.Peak:0.000}, next best {c.RunnerUp:0.000} (margin {c.Margin:0.0}×)");
+                Console.WriteLine($"  correlation {c.Peak:0.000}, next best {c.RunnerUp:0.000} (margin {c.Margin:0.0}x)");
             foreach (var cov in result.Coverage ?? [])
             {
                 var placement = cov.Coverage == 0 ? " (left out)"
@@ -300,34 +287,33 @@ namespace Sidetrack.Cli
                 Console.WriteLine($"  track {cov.Track}: {cov.Coverage:P0} of the clip recorded{placement}");
             }
             if (result.OutputPath is not null) Console.WriteLine($"  wrote {result.OutputPath}");
-            return result;
         }
 
-        private static AttachOptions AttachOptionsFor(Args cli, IReadOnlyList<(string Name, CaptureSource Source)> tracks)
+        private static AttachOptions AttachOptionsFor(Args cli, SidetrackSettings settings)
         {
-            var reference = cli.Value("--ref") ?? ReferenceTrack;
-            var names = cli.Value("--tracks")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        ?? tracks.Select(t => t.Name).Where(n => n != reference).ToArray();
+            var names = cli.Value("--tracks")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var tracks = names is null
+                ? settings.Tracks.Where(t => t.Enabled).Select(t => new ExportTrack(t.Id, t.Title)).ToList()
+                : names.Select(n => new ExportTrack(n, settings.Tracks.FirstOrDefault(t => t.Id == n)?.Title ?? Title(n))).ToList();
             return new AttachOptions(
-                names.Select(n => new ExportTrack(n, Title(n))).ToList(),
-                reference,
-                cli.Value("--out") ?? SidetrackPaths.DefaultOutput,
+                tracks,
+                cli.Value("--ref") ?? ReferenceTrack,
+                cli.Value("--out") ?? settings.EffectiveOutputFolder,
                 cli.Flag("--keep-temp"));
         }
 
-        private static List<(string Name, CaptureSource Source)> TrackSpecs(Args cli)
+        /// <summary>The app's saved settings, with tracks replaced when --track is given.</summary>
+        private static SidetrackSettings SettingsFor(Args cli)
         {
+            var saved = SettingsStore.Default.Load(out var problem);
+            if (problem is not null) Console.Error.WriteLine($"sidetrack: {problem}");
             var given = cli.Values("--track");
-            var specs = given.Count == 0
-                ? DefaultTracks.ToList()
-                : given.Select(t => t.IndexOf('=') is var i and > 0
-                    ? (t[..i].Trim(), t[(i + 1)..].Trim())
-                    : throw new UsageException($"--track {t}: expected name=source, e.g. discord=app:Discord.exe")).ToList();
-            foreach (var (name, _) in specs)
-                if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new UsageException($"Track name \"{name}\" is not a valid folder name.");
-            if (specs.Select(s => s.Item1).Distinct(StringComparer.OrdinalIgnoreCase).Count() != specs.Count)
-                throw new UsageException("Track names must be unique.");
-            return specs.Select(s => (s.Item1, CaptureSource.Parse(s.Item2))).ToList();
+            if (given.Count == 0) return saved;
+            var tracks = given.Select(t => t.IndexOf('=') is var i and > 0
+                    ? new TrackSettings(t[..i].Trim(), Title(t[..i].Trim()), true, CaptureSource.Parse(t[(i + 1)..].Trim()))
+                    : throw new UsageException($"--track {t}: expected name=source, e.g. voice=app:Discord.exe")).ToList();
+            try { return SettingsStore.Validate(saved with { Tracks = tracks }); }
+            catch (ArgumentException ex) { throw new UsageException(ex.Message); }
         }
 
         private static (SteamUser User, IReadOnlyList<string> Roots) SteamRoots()
@@ -347,6 +333,8 @@ namespace Sidetrack.Cli
         {
             "mic" => "Mic",
             "discord" => "Discord",
+            "voice" => "Voice chat",
+            "game" => "Game",
             "system" => "System audio",
             _ => char.ToUpperInvariant(track[0]) + track[1..],
         };

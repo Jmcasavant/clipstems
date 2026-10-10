@@ -1,16 +1,74 @@
-using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
 namespace Sidetrack.Core.Steam;
 
-/// <summary>Steam's recording-related settings for one account, read from <c>localconfig.vdf</c>.</summary>
-/// <param name="AudioOption">Raw <c>Recording_Audio_Option</c>; its value meanings are not documented.</param>
-/// <param name="MicInMix">Raw <c>Audio_Mic</c>; "1" means Steam mixes the microphone into its track.</param>
+/// <summary>A program ticked under Steam > Settings > Game Recording > "Record Audio from…".</summary>
+/// <param name="Exe">Its exe name, e.g. <c>Discord.exe</c>.</param>
+/// <param name="Label">The name Steam shows for it.</param>
+public sealed record SteamAudioProgram(string Exe, string Label);
+
+/// <summary>
+/// Steam's Game Recording settings for one account: the <c>GameRecording</c>
+/// block of <c>localconfig.vdf</c>, as observed 2026-10-10.
+/// </summary>
+/// <param name="AudioOption">
+/// Raw <c>Recording_Audio_Option</c>. "2" is "Game and Selected Programs"
+/// (observed against the settings screen); other values are not mapped.
+/// </param>
+/// <param name="MicInMix">Raw <c>Audio_Mic</c>; "1" means "Record Microphone" is on.</param>
+/// <param name="Programs">The ticked programs (<c>ExtraAudioSessions</c>).</param>
 public sealed record SteamRecordingSettings(
     string? BackgroundRecordPath,
     string? BackgroundRecordMode,
     string? AudioOption,
-    string? MicInMix);
+    string? MicInMix,
+    IReadOnlyList<SteamAudioProgram> Programs)
+{
+    public const string GameAndSelectedPrograms = "2";
+
+    public static readonly SteamRecordingSettings Empty = new(null, null, null, null, []);
+
+    public bool RecordsSelectedPrograms => AudioOption == GameAndSelectedPrograms;
+
+    /// <summary>The programs whose audio is in Steam's own track: the ticked ones, when Steam uses that list.</summary>
+    public IReadOnlyList<SteamAudioProgram> ProgramsInMix => RecordsSelectedPrograms ? Programs : [];
+
+    public string AudioOptionDescription => AudioOption switch
+    {
+        GameAndSelectedPrograms => "Game and Selected Programs",
+        null => "(not set)",
+        var raw => $"option {raw}",
+    };
+
+    public static SteamRecordingSettings FromLocalConfig(VdfNode localConfig)
+    {
+        if (localConfig.Find("GameRecording") is not { } block) return Empty;
+        var programs = new List<SteamAudioProgram>();
+        foreach (var session in block.Child("ExtraAudioSessions")?.Children ?? [])
+        {
+            if (ExeFromSessionName(session["name"]) is { } exe)
+                programs.Add(new SteamAudioProgram(exe, session["Label"] ?? Path.GetFileNameWithoutExtension(exe)));
+        }
+        return new SteamRecordingSettings(
+            block["BackgroundRecordPath"], block["BackgroundRecordMode"], block["Recording_Audio_Option"], block["Audio_Mic"], programs);
+    }
+
+    /// <summary>
+    /// An audio session id looks like
+    /// <c>{device}|\Device\HarddiskVolume3\...\Discord.exe%b{guid}</c>; the exe
+    /// name is what survives app updates, which change the folder.
+    /// </summary>
+    internal static string? ExeFromSessionName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        int bar = name.IndexOf('|');
+        var path = bar >= 0 ? name[(bar + 1)..] : name;
+        int marker = path.IndexOf("%b", StringComparison.Ordinal);
+        if (marker >= 0) path = path[..marker];
+        var file = path[(path.LastIndexOf('\\') + 1)..];
+        return file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? file : null;
+    }
+}
 
 public sealed record SteamUser(string AccountId, string UserDataDirectory, SteamRecordingSettings Settings)
 {
@@ -32,7 +90,7 @@ public sealed record SteamUser(string AccountId, string UserDataDirectory, Steam
 }
 
 /// <summary>Locates Steam and its accounts. Read-only: nothing here writes to Steam.</summary>
-public static partial class SteamInstall
+public static class SteamInstall
 {
     public static string? FindSteamPath()
     {
@@ -55,13 +113,7 @@ public static partial class SteamInstall
         {
             var id = Path.GetFileName(dir);
             if (!id.All(char.IsAsciiDigit) || id == "0") continue;
-            var config = Path.Combine(dir, "config", "localconfig.vdf");
-            var values = File.Exists(config) ? ReadVdfValues(File.ReadAllText(config)) : [];
-            users.Add(new SteamUser(id, dir, new SteamRecordingSettings(
-                values.GetValueOrDefault("BackgroundRecordPath"),
-                values.GetValueOrDefault("BackgroundRecordMode"),
-                values.GetValueOrDefault("Recording_Audio_Option"),
-                values.GetValueOrDefault("Audio_Mic"))));
+            users.Add(new SteamUser(id, dir, ReadSettings(Path.Combine(dir, "config", "localconfig.vdf"))));
         }
         return users;
     }
@@ -81,28 +133,21 @@ public static partial class SteamInstall
         return users.OrderByDescending(u => LastWrite(Path.Combine(u.UserDataDirectory, "config", "localconfig.vdf"))).FirstOrDefault();
     }
 
-    /// <summary>
-    /// Flat key/value scan of a VDF text file: the first occurrence of each
-    /// quoted key with a quoted value. Enough for the handful of settings
-    /// Sidetrack reads; it does not model nesting.
-    /// </summary>
-    public static Dictionary<string, string> ReadVdfValues(string text)
+    private static SteamRecordingSettings ReadSettings(string localConfig)
     {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (Match m in KeyValue().Matches(text))
+        if (!File.Exists(localConfig)) return SteamRecordingSettings.Empty;
+        try
         {
-            var key = Unescape(m.Groups[1].Value);
-            values.TryAdd(key, Unescape(m.Groups[2].Value));
+            // Steam rewrites this file while running; share so a read never blocks it.
+            using var stream = new FileStream(localConfig, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return SteamRecordingSettings.FromLocalConfig(Vdf.Parse(reader.ReadToEnd()));
         }
-        return values;
+        catch (Exception ex) when (ex is IOException or FormatException)
+        {
+            return SteamRecordingSettings.Empty;
+        }
     }
 
-    private static string Unescape(string s) => s.Replace("\\\\", "\\").Replace("\\\"", "\"");
-
     private static DateTime LastWrite(string path) => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
-
-    [GeneratedRegex("""
-        "((?:[^"\\]|\\.)*)"[ \t]+"((?:[^"\\]|\\.)*)"
-        """)]
-    private static partial Regex KeyValue();
 }

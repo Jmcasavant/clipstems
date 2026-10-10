@@ -1,6 +1,6 @@
 using Sidetrack.Core.Steam;
 
-namespace Sidetrack.Cli;
+namespace Sidetrack.Core.Engine;
 
 /// <summary>
 /// Polls Steam's clip folders for clips saved after the watcher started.
@@ -9,7 +9,7 @@ namespace Sidetrack.Cli;
 /// FileSystemWatcher, because the roots can be on any drive and a missed
 /// event would silently skip a clip.
 /// </summary>
-internal sealed class ClipWatcher
+public sealed class ClipWatcher
 {
     private static readonly TimeSpan Settle = TimeSpan.FromSeconds(5);
     private readonly IReadOnlyList<string> _roots;
@@ -25,6 +25,8 @@ internal sealed class ClipWatcher
         // recording; only clips saved from now on are attached automatically.
         _known.UnionWith(ClipCatalog.List(roots).Select(c => c.Directory));
     }
+
+    public IReadOnlyList<string> Roots => _roots;
 
     public IEnumerable<string> ReadyClips()
     {

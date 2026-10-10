@@ -112,21 +112,6 @@ public class SteamMetadataTests
     }
 
     [Fact]
-    public void Vdf_values_unescape_windows_paths()
-    {
-        var values = SteamInstall.ReadVdfValues("""
-            "system"
-            {
-                "BackgroundRecordPath"		"C:\\Users\\someone\\Videos"
-                "Audio_Mic"		"1"
-                "Audio_Mic"		"0"
-            }
-            """);
-        Assert.Equal(@"C:\Users\someone\Videos", values["BackgroundRecordPath"]);
-        Assert.Equal("1", values["Audio_Mic"]);
-    }
-
-    [Fact]
     public void Recording_roots_list_configured_path_then_default_without_duplicates()
     {
         using var dir = new TempDir();
@@ -136,10 +121,10 @@ public class SteamMetadataTests
         Directory.CreateDirectory(fallback);
         Directory.CreateDirectory(custom);
 
-        var user = new SteamUser("42", userData, new SteamRecordingSettings(custom, "1", "2", "0"));
+        var user = new SteamUser("42", userData, new SteamRecordingSettings(custom, "1", "2", "0", []));
         Assert.Equal([custom, fallback], user.RecordingRoots());
 
-        var same = new SteamUser("42", userData, new SteamRecordingSettings(fallback, "1", "2", "0"));
+        var same = new SteamUser("42", userData, new SteamRecordingSettings(fallback, "1", "2", "0", []));
         Assert.Equal([fallback], same.RecordingRoots());
     }
 }

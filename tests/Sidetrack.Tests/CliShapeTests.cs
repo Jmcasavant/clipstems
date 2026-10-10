@@ -6,21 +6,34 @@ namespace Sidetrack.Tests;
 public class CliShapeTests
 {
     [Theory]
-    [InlineData("mic", SourceKind.Microphone, null)]
-    [InlineData("mic:fifine", SourceKind.Microphone, "fifine")]
-    [InlineData("system", SourceKind.SystemOutput, null)]
-    [InlineData("app:Discord", SourceKind.Application, "Discord.exe")]
-    [InlineData("APP:spotify.exe", SourceKind.Application, "spotify.exe")]
-    public void Source_specs_parse(string spec, SourceKind kind, string? target)
+    [InlineData("mic", SourceKind.Microphone, null, "")]
+    [InlineData("mic:fifine", SourceKind.Microphone, "fifine", "")]
+    [InlineData("system", SourceKind.SystemOutput, null, "")]
+    [InlineData("app:Discord", SourceKind.Application, null, "Discord.exe")]
+    [InlineData("APP:spotify.exe", SourceKind.Application, null, "spotify.exe")]
+    [InlineData("app:Discord|DiscordPTB.exe", SourceKind.Application, null, "Discord.exe,DiscordPTB.exe")]
+    [InlineData("game", SourceKind.SteamGame, null, "")]
+    [InlineData("all", SourceKind.AllExceptSelf, null, "")]
+    public void Source_specs_parse(string spec, SourceKind kind, string? device, string apps)
     {
         var source = CaptureSource.Parse(spec);
         Assert.Equal(kind, source.Kind);
-        Assert.Equal(target, source.Target);
+        Assert.Equal(device, source.Device);
+        Assert.Equal(apps, string.Join(',', source.Apps));
+    }
+
+    [Fact]
+    public void Only_default_device_sources_follow_device_changes()
+    {
+        Assert.True(CaptureSource.Parse("mic").FollowsDefaultDevice);
+        Assert.False(CaptureSource.Parse("mic:fifine").FollowsDefaultDevice);
+        Assert.False(CaptureSource.Parse("all").FollowsDefaultDevice);
     }
 
     [Theory]
     [InlineData("app:")]
     [InlineData("speaker")]
+    [InlineData("game:cs2")]
     public void Bad_source_specs_are_refused(string spec) =>
         Assert.Throws<FormatException>(() => CaptureSource.Parse(spec));
 

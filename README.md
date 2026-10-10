@@ -19,24 +19,25 @@ dotnet run --project src/Sidetrack.Cli -- doctor
 dotnet run --project src/Sidetrack.Cli -- watch
 ```
 
-`watch` records the default tracks (`mic`, `discord` = `app:Discord.exe`,
-`system` = sync reference) and writes `Videos\Sidetrack\<clip title>.mp4`
-for every clip Steam saves while it runs. Other commands:
+`watch` splits Steam's mix into its parts: your mic, the game, and one
+track per program ticked under Steam > Settings > Game Recording >
+"Record Audio from…" (Game and Selected Programs). It writes
+`Videos\Sidetrack\<clip title>.mp4` for every clip Steam saves while it
+runs, with Steam's mix kept as track 1. Other commands:
 
 | Command | Does |
 |---|---|
-| `doctor` | Checks Steam, recording roots, newest clip's metadata, ffmpeg, buffer, per-app capture |
+| `doctor` | Checks Steam (and what its track contains), the tracks Sidetrack will record, ffmpeg, buffer, per-app capture |
 | `devices` | Lists input and output devices |
+| `apps` | Lists apps with audio sessions, for `app:` sources |
 | `clips` | Lists Steam clips and which buffered tracks cover them |
-| `record [--track name=source]... [--seconds N]` | Records into the rolling buffer only |
-| `attach <clip folder or latest> [--tracks a,b] [--ref system] [--out dir]` | Writes the MP4 for one clip |
+| `record [--track name=source]... [--when always\|game] [--seconds N]` | Records into the rolling buffer only |
+| `attach <clip folder or latest> [--tracks a,b] [--out dir]` | Writes the MP4 for one clip |
 
-Sources: `mic`, `mic:<device name part>`, `system`, `system:<device name part>`,
-`app:<exe>`, `pid:<id>`. Example: `--track game=app:cs2.exe --track mic=mic --track system=system`.
-
-Turn off Steam's own microphone recording (Steam > Settings > Game
-Recording) when Sidetrack records your mic, or you hear it twice;
-`doctor` warns when it is on.
+Sources: `mic`, `mic:<device>`, `system`, `system:<device>`,
+`app:<exe>[|<exe>...]`, `game`, `all`, `pid:<id>`. Example:
+`--track mic=mic --track game=game --track voice=app:Discord.exe|Vesktop.exe`.
+Without `--track`, the app's saved tracks plus Steam's ticked programs are used.
 
 ## Develop
 

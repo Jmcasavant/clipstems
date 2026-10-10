@@ -48,8 +48,58 @@ internal interface IMMDeviceEnumerator
     [PreserveSig] int EnumAudioEndpoints(EDataFlow dataFlow, uint stateMask, out IMMDeviceCollection devices);
     [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice device);
     [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string id, out IMMDevice device);
-    [PreserveSig] int RegisterEndpointNotificationCallback(IntPtr client);
-    [PreserveSig] int UnregisterEndpointNotificationCallback(IntPtr client);
+    [PreserveSig] int RegisterEndpointNotificationCallback(IMMNotificationClient client);
+    [PreserveSig] int UnregisterEndpointNotificationCallback(IMMNotificationClient client);
+}
+
+[ComImport, Guid("7991EEC9-7E89-4D85-8390-6C703CEC60C0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMNotificationClient
+{
+    [PreserveSig] int OnDeviceStateChanged([MarshalAs(UnmanagedType.LPWStr)] string deviceId, uint newState);
+    [PreserveSig] int OnDeviceAdded([MarshalAs(UnmanagedType.LPWStr)] string deviceId);
+    [PreserveSig] int OnDeviceRemoved([MarshalAs(UnmanagedType.LPWStr)] string deviceId);
+    [PreserveSig] int OnDefaultDeviceChanged(EDataFlow flow, ERole role, [MarshalAs(UnmanagedType.LPWStr)] string? defaultDeviceId);
+    [PreserveSig] int OnPropertyValueChanged([MarshalAs(UnmanagedType.LPWStr)] string deviceId, PropertyKey key);
+}
+
+[ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionManager2
+{
+    [PreserveSig] int GetAudioSessionControl(IntPtr sessionGuid, uint flags, out IntPtr control);
+    [PreserveSig] int GetSimpleAudioVolume(IntPtr sessionGuid, uint flags, out IntPtr volume);
+    [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator enumerator);
+    [PreserveSig] int RegisterSessionNotification(IntPtr notification);
+    [PreserveSig] int UnregisterSessionNotification(IntPtr notification);
+    [PreserveSig] int RegisterDuckNotification([MarshalAs(UnmanagedType.LPWStr)] string sessionId, IntPtr notification);
+    [PreserveSig] int UnregisterDuckNotification(IntPtr notification);
+}
+
+[ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionEnumerator
+{
+    [PreserveSig] int GetCount(out int count);
+    [PreserveSig] int GetSession(int index, out IAudioSessionControl2 session);
+}
+
+[ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionControl2
+{
+    // IAudioSessionControl
+    [PreserveSig] int GetState(out int state);
+    [PreserveSig] int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+    [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, IntPtr eventContext);
+    [PreserveSig] int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string path);
+    [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr eventContext);
+    [PreserveSig] int GetGroupingParam(out Guid grouping);
+    [PreserveSig] int SetGroupingParam(ref Guid grouping, IntPtr eventContext);
+    [PreserveSig] int RegisterAudioSessionNotification(IntPtr notification);
+    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr notification);
+    // IAudioSessionControl2
+    [PreserveSig] int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+    [PreserveSig] int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+    [PreserveSig] int GetProcessId(out uint pid);
+    [PreserveSig] int IsSystemSoundsSession();
+    [PreserveSig] int SetDuckingPreference(bool optOut);
 }
 
 [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -139,6 +189,7 @@ internal static class Wasapi
     public const string ProcessLoopbackDevice = @"VAD\Process_Loopback";
     public const int ActivationTypeProcessLoopback = 1;
     public const int ProcessLoopbackIncludeTree = 0;
+    public const int ProcessLoopbackExcludeTree = 1;
     public const ushort VtBlob = 65;
     public const ushort VtLpwstr = 31;
 
