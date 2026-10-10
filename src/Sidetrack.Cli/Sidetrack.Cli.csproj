@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sidetrack.Core\Sidetrack.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>sidetrack</AssemblyName>
+    <RootNamespace>Sidetrack.Cli</RootNamespace>
+    
+  </PropertyGroup>
+
+</Project>

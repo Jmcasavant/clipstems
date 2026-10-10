@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sidetrack.Cli/Sidetrack.Cli.csproj" />
+    <Project Path="src/Sidetrack.Core/Sidetrack.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sidetrack.Tests/Sidetrack.Tests.csproj" />
+  </Folder>
+</Solution>
