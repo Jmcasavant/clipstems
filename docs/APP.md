@@ -96,5 +96,5 @@ differ in sound but still correlate.
 3. Packaging: Velopack installer and updates (1.2.161 current), bundled
    ffmpeg LGPL shared build run as a separate process with its license
    and source link shipped in About; code signing decision.
-4. Clips spanning several recordings; compressed buffer (Opus segments via
-   ffmpeg after each minute closes, ~10× smaller); mixdown "quick share".
+4. Compressed buffer: done (see PLAN.md, "Compressed buffer"). Next: clips
+   spanning several recordings; mixdown "quick share".

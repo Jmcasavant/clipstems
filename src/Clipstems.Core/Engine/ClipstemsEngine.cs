@@ -40,6 +40,9 @@ public sealed record EngineOptions
     /// <summary>Attach new Steam clips automatically. Off for record-only runs.</summary>
     public bool AutoAttach { get; init; } = true;
 
+    /// <summary>Compress closed buffer segments to Opus (needs ffmpeg). Off keeps WAV.</summary>
+    public bool CompressBuffer { get; init; } = true;
+
     /// <summary>How long recording continues after Steam stops reporting a game.</summary>
     public TimeSpan GraceAfterGame { get; init; } = TimeSpan.FromSeconds(30);
 }
@@ -65,6 +68,11 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     private readonly ILoggerFactory _loggers;
     private readonly ILogger _log;
     private readonly SegmentStore _store;
+    private readonly BufferCompactor _compactor;
+    private Task? _compacting;
+
+    /// <summary>How often closed segments are looked for; each closes once a minute per track.</summary>
+    private static readonly TimeSpan CompactInterval = TimeSpan.FromSeconds(15);
     private readonly CancellationTokenSource _stop = new();
     private readonly Channel<string> _attachQueue = Channel.CreateUnbounded<string>();
     private readonly Dictionary<string, (TrackRecorder Recorder, string Title)> _recorders = new();
@@ -98,7 +106,8 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         _options = options ?? new EngineOptions();
         _loggers = loggers ?? NullLoggerFactory.Instance;
         _log = _loggers.CreateLogger<ClipstemsEngine>();
-        _store = new SegmentStore(_options.BufferRoot);
+        _store = new SegmentStore(_options.BufferRoot, new OpusSegmentCodec());
+        _compactor = new BufferCompactor(_store, _store.Codec!, _loggers.CreateLogger<BufferCompactor>());
     }
 
     /// <summary>Raised about once a second and on every state change, on a background thread.</summary>
@@ -185,6 +194,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     {
         _main = Task.Run(() => MainLoop(_stop.Token));
         _attacher = Task.Run(() => AttachLoop(_stop.Token));
+        if (_options.CompressBuffer) _compacting = Task.Run(() => CompactLoop(_stop.Token));
     }
 
     /// <summary>Applies new settings; recorders restart only if the tracks changed.</summary>
@@ -205,7 +215,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     {
         _stop.Cancel();
         _attachQueue.Writer.TryComplete();
-        foreach (var task in new[] { _main, _attacher }.OfType<Task>())
+        foreach (var task in new[] { _main, _attacher, _compacting }.OfType<Task>())
         {
             try { await task; }
             catch (OperationCanceledException) { }
@@ -334,6 +344,9 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         if (_steamPath is null) issues.Add(new(IssueSeverity.Problem, "Steam is not installed, so there are no clips to add tracks to."));
         else if (_steamUser is null) issues.Add(new(IssueSeverity.Problem, "Open Steam and sign in so Clipstems can find your clips."));
         else if (_watcher is null) issues.Add(new(IssueSeverity.Warning, "Steam has no recordings folder yet; turn on Game Recording in Steam's settings."));
+        if (_compactor.FailingSegments > 0)
+            issues.Add(new(IssueSeverity.Warning,
+                "Some recorded audio couldn't be compressed, so the buffer is using more disk than usual. Clipstems keeps retrying; the log (About › Open logs) has details."));
         if (_options.AutoAttach && Ffmpeg.Locate() is null)
             issues.Add(new(IssueSeverity.Problem, "FFmpeg is missing, so clips can't get their tracks yet. Install it (winget install Gyan.FFmpeg.Essentials); while Clipstems keeps running, clips you save meanwhile get their tracks once it's found."));
         if (!loopbackOk && settings.Tracks.Any(t => t.Enabled && t.Source.Kind is SourceKind.Application or SourceKind.SteamGame))
@@ -446,6 +459,32 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         {
             foreach (var (id, (recorder, _)) in _recorders) _peaks[id] = recorder.TakePeakDbfs();
         }
+    }
+
+    /// <summary>
+    /// Compresses closed segments in the background. Only the buffer's owner does
+    /// it, and only with ffmpeg present; without it segments stay WAV and still read.
+    /// </summary>
+    private async Task CompactLoop(CancellationToken cancel)
+    {
+        try
+        {
+            while (!cancel.IsCancellationRequested)
+            {
+                await Task.Delay(CompactInterval, cancel);
+                if (_bufferLock is null || Ffmpeg.Locate() is null) continue;
+                try
+                {
+                    int n = _compactor.CompactClosed(DateTime.UtcNow, cancel);
+                    if (n > 0) _log.LogDebug("Compressed {Count} buffer segments", n);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _log.LogWarning("Compressing the buffer failed this pass: {Error}", ex.Message);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task AttachLoop(CancellationToken cancel)

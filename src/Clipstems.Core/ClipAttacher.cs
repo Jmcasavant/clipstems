@@ -158,9 +158,9 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
             {
                 // Only refine when global sync held: ±100 ms cannot rescue a ±1 s guess.
                 var (trackStart, adjustmentMs) = sync == SyncState.Verified
-                    ? RefineTrack(store, track.Name, startTicks, steamProbe)
+                    ? RefineTrack(store, track.Name, startTicks, steamProbe, cancel)
                     : (startTicks, null);
-                var window = store.ReadWindow(track.Name, trackStart, frames);
+                var window = store.ReadWindow(track.Name, trackStart, frames, cancel);
                 coverage.Add(new TrackCoverage(track.Name, window.Coverage, adjustmentMs) { Title = track.Title });
                 // A track with no audio is still written (silent), so track N is always the same
                 // source and an editor's track layout holds from clip to clip.
@@ -203,12 +203,13 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
     /// synced start) against Steam's audio. Returns the start unchanged and a
     /// null adjustment when the match is not clear, e.g. a mic Steam does not record.
     /// </summary>
-    internal static (long StartTicks, double? AdjustmentMs) RefineTrack(SegmentStore store, string track, long startTicks, float[]? steamProbe)
+    internal static (long StartTicks, double? AdjustmentMs) RefineTrack(SegmentStore store, string track, long startTicks, float[]? steamProbe,
+        CancellationToken cancel = default)
     {
         if (steamProbe is not { Length: > 0 }) return (startTicks, null);
         long margin = TrackSearch.Ticks;
         long probeTicks = (long)steamProbe.Length * TimeSpan.TicksPerSecond / Downmix.SyncRate;
-        var window = store.ReadWindow(track, startTicks - margin, PcmFormat.TicksToFrames(probeTicks + 2 * margin));
+        var window = store.ReadWindow(track, startTicks - margin, PcmFormat.TicksToFrames(probeTicks + 2 * margin), cancel);
         if (window.Coverage < 0.5) return (startTicks, null);
         var match = Correlator.Locate(Downmix.ToSyncRate(window.Samples), steamProbe, exclusionSamples: Downmix.SyncRate / 100);
         if (match is null || match.Peak < TrackMinPeak || match.Margin < TrackMinMargin) return (startTicks, null);
@@ -222,7 +223,7 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
         var probeDuration = duration < options.MaxProbe ? duration : options.MaxProbe;
         long refStart = coarseTicks - options.SearchMargin.Ticks;
         long refFrames = PcmFormat.TicksToFrames(probeDuration.Ticks + 2 * options.SearchMargin.Ticks);
-        var reference = store.ReadWindow(options.ReferenceTrack, refStart, refFrames);
+        var reference = store.ReadWindow(options.ReferenceTrack, refStart, refFrames, cancel);
         if (reference.Coverage < 0.5)
             return (coarseTicks, SyncState.Unverified, null,
                 $"reference track \"{options.ReferenceTrack}\" covers {reference.Coverage:P0} of the search window", null);

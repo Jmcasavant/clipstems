@@ -55,5 +55,8 @@ dotnet test
 ```
 
 The buffer lives in `%LOCALAPPDATA%\Clipstems\buffer` (override with
-`CLIPSTEMS_BUFFER`) as one-minute WAV segments named by UTC start time,
-kept for 120 minutes by default. Clipstems only reads Steam's folders.
+`CLIPSTEMS_BUFFER`) as one-minute segments named by UTC start time, kept
+for 120 minutes by default. The minute being recorded is WAV; closed
+minutes are compressed to Opus (about 12× smaller) when ffmpeg is present.
+`clipstems compact` compresses an existing buffer now. Clipstems only
+reads Steam's folders.

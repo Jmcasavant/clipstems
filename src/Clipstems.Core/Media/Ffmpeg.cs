@@ -51,6 +51,18 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
         return output.ToArray();
     }
 
+    /// <summary>Decodes the first audio stream to interleaved 16-bit stereo at 48 kHz, the buffer's format.</summary>
+    public async Task<byte[]> DecodePcmAsync(string input, CancellationToken cancel)
+    {
+        using var output = new MemoryStream();
+        await RunAsync(FfmpegPath,
+        [
+            "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-i", input, "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "-",
+        ], output, cancel);
+        return output.ToArray();
+    }
+
     public async Task<StreamTimes> ProbeStreamTimesAsync(string input, CancellationToken cancel)
     {
         using var output = new MemoryStream();

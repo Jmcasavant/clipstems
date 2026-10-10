@@ -35,6 +35,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>16-bit stereo at 48 kHz, as the buffer stores it.</summary>
     private const double BufferBytesPerSecond = 48_000 * 2 * 2;
 
+    /// <summary>Opus at 128 kbps (OpusSegmentCodec), what closed segments shrink to.</summary>
+    private const double CompressedBytesPerSecond = 128_000 / 8;
+
     private readonly ClipstemsEngine _engine;
     private readonly SettingsStore _store;
     private readonly ILogger _log;
@@ -394,9 +397,20 @@ public sealed partial class SettingsViewModel : ObservableObject
             ? "Turn on at least one track below."
             : $"When you save a clip in Steam, Clipstems saves a copy with {extra} extra audio track{(extra == 1 ? "" : "s")} to {FriendlyFolder(Collect().EffectiveOutputFolder)}. " +
               "Track 1 keeps Steam's own audio; Steam's clip isn't changed.";
-        double gb = (extra + 1) * BufferBytesPerSecond * RetentionMinutes * 60 / 1e9;
-        DiskEstimate = $"Uses up to {gb:0.#} GB of disk: {extra} track{(extra == 1 ? "" : "s")} plus one hidden track Clipstems uses to check timing.";
+        // Each track keeps its current minute uncompressed; everything older is compressed when that works.
+        // Opus is variable bitrate, so the compressed figure is typical, not a ceiling.
+        int buffered = extra + 1; // plus the hidden timing track
+        double seconds = RetentionMinutes * 60;
+        double typical = buffered * (CompressedBytesPerSecond * Math.Max(0, seconds - 60) + BufferBytesPerSecond * Math.Min(60, seconds));
+        double uncompressed = buffered * BufferBytesPerSecond * seconds;
+        string tracks = $"{extra} track{(extra == 1 ? "" : "s")} plus one hidden track Clipstems uses to check timing";
+        DiskEstimate = Ffmpeg.Locate() is not null
+            ? $"Typically about {Size(typical)} of disk for {tracks}; up to {Size(uncompressed)} if the audio can't be compressed."
+            : $"Up to {Size(uncompressed)} of disk for {tracks}. Installing FFmpeg makes this about 10 times smaller.";
     }
+
+    /// <summary>A disk size rounded for reading: GB to one decimal, else MB to the next 10.</summary>
+    private static string Size(double bytes) => bytes >= 1e9 ? $"{bytes / 1e9:0.#} GB" : $"{Math.Ceiling(bytes / 1e7) * 10:0} MB";
 
     /// <summary>"Videos\Clipstems" rather than the full path when the folder is under the user's Videos.</summary>
     private static string FriendlyFolder(string folder)

@@ -74,6 +74,19 @@ unless a source is named.
   start time of their first frame (`<track>/<ticks>.wav`). A fresh anchor per
   segment bounds clock drift to a few ms. Retention defaults to 2 h, matching
   a typical Steam background buffer.
+- **Compressed buffer:** once a segment closes it becomes Opus at 128 kbps
+  (`<track>/<ticks>-<frames>.opus`; the name keeps the length so no index
+  is needed). The WAV is deleted only after the Opus copy decodes back to
+  the same frame count, is flushed to disk, and is published by a
+  write-through rename (`MOVEFILE_WRITE_THROUGH`), so a crash or power cut
+  never leaves the WAV deleted and the copy lost. Readers that race the
+  swap look the segment up again by its start time. ffmpeg's libopus round trip is sample-exact: same
+  length, a click on the same sample, 17–20× smaller on noise (verified
+  2026-10-10, via ffmpeg 9.0.1). On a real session the clip window's 18
+  segments went from 198 MB to 9 MB, and attaching the same clip from WAV
+  and from Opus gave the same sync (+551.3 ms, correlation 0.691 vs 0.690,
+  Discord +21.1 ms) with the mic and Discord tracks 0 samples apart
+  (verified 2026-10-10, via `clipstems attach` on both buffers).
 
 ## Attaching a clip
 

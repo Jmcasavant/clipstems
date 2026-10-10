@@ -30,6 +30,7 @@ try
         "record" => await Commands.Record(cli, watch: false, cancel.Token),
         "watch" => await Commands.Record(cli, watch: true, cancel.Token),
         "attach" => await Commands.Attach(cli, cancel.Token),
+        "compact" => Commands.Compact(cancel.Token),
         "help" or "--help" or "-h" or null => Commands.Help(),
         _ => Commands.Unknown(cli.Command),
     };
@@ -65,6 +66,8 @@ namespace Clipstems.Cli
                                                    record, and write a multi-track MP4 for each new Steam clip
                   clipstems attach <clip folder | latest> [--tracks a,b] [--ref _reference] [--out dir] [--keep-temp]
                                                    write the multi-track MP4 for one clip
+                  clipstems compact                compress closed buffer segments to Opus now (the app and
+                                                   watch do this on their own; refused while either is running)
 
                 Sources: mic, mic:<device>, system, system:<device>, app:<exe>[|<exe>...], game, all, pid:<id>
                 Without --track, the tracks saved by the Clipstems app are used (default: mic, voice chat).
@@ -144,18 +147,34 @@ namespace Clipstems.Cli
             else Ok("ffmpeg/ffprobe", ffmpeg.FfmpegPath);
 
             Console.WriteLine("Buffer");
-            var store = new SegmentStore(ClipstemsPaths.Buffer);
+            var store = new SegmentStore(ClipstemsPaths.Buffer, new OpusSegmentCodec());
             Ok("folder", store.Root);
             foreach (var track in store.Tracks())
             {
                 var segs = store.List(track);
                 if (segs.Count == 0) continue;
                 long bytes = segs.Sum(s => new FileInfo(s.Path).Length);
-                Ok($"track {track}", $"{segs.Count} segments, {Local(segs[0].StartTicks)} to {Local(segs[^1].EndTicks)}, {bytes / (1024.0 * 1024):0} MB");
+                Ok($"track {track}", $"{segs.Count} segments ({segs.Count(s => s.Compressed)} compressed), " +
+                    $"{Local(segs[0].StartTicks)} to {Local(segs[^1].EndTicks)}, {bytes / (1024.0 * 1024):0} MB");
             }
 
             Console.WriteLine(problems == 0 ? "No blocking problems." : $"{problems} blocking problem(s).");
             return problems == 0 ? 0 : 1;
+        }
+
+        public static int Compact(CancellationToken cancel)
+        {
+            if (Ffmpeg.Locate() is null) throw new UsageException("compact needs ffmpeg; install it or set CLIPSTEMS_FFMPEG.");
+            // The buffer's owner compresses as it records; a second compressor would race it.
+            using var owner = BufferLock.TryAcquire(ClipstemsPaths.Buffer)
+                ?? throw new UsageException("Clipstems (the app or watch) is running and compresses the buffer itself.");
+            var store = new SegmentStore(ClipstemsPaths.Buffer, new OpusSegmentCodec());
+            long Size() => store.Tracks().SelectMany(store.List).Sum(s => new FileInfo(s.Path).Length);
+            long before = Size();
+            int n = new BufferCompactor(store, store.Codec!).CompactClosed(DateTime.UtcNow, cancel);
+            long after = Size();
+            Console.WriteLine($"Compressed {n} segment(s): {before / (1024.0 * 1024):0} MB -> {after / (1024.0 * 1024):0} MB.");
+            return 0;
         }
 
         public static int Devices()
@@ -176,7 +195,7 @@ namespace Clipstems.Cli
         public static int Clips()
         {
             var (_, roots) = SteamRoots();
-            var store = new SegmentStore(ClipstemsPaths.Buffer);
+            var store = new SegmentStore(ClipstemsPaths.Buffer, new OpusSegmentCodec());
             var clips = ClipCatalog.List(roots);
             if (clips.Count == 0)
             {
@@ -261,7 +280,7 @@ namespace Clipstems.Cli
             if (!File.Exists(Path.Combine(target, "clip.pb"))) throw new UsageException($"{target} is not a Steam clip folder (no clip.pb).");
 
             var ffmpeg = Ffmpeg.Locate() ?? throw new UsageException("attach needs ffmpeg; install it or set CLIPSTEMS_FFMPEG.");
-            var store = new SegmentStore(ClipstemsPaths.Buffer);
+            var store = new SegmentStore(ClipstemsPaths.Buffer, new OpusSegmentCodec());
             var options = AttachOptionsFor(cli, SettingsFor(cli));
             var clip = ClipInfo.Read(target);
             Console.WriteLine($"Clip {clip.Name} ({clip.Title}), {clip.DurationMs / 1000.0:0.0} s, starts {clip.CoarseStartUtc.ToLocalTime():HH:mm:ss.fff} per Steam");
