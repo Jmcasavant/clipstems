@@ -92,6 +92,7 @@ Copy-Item (Join-Path $bin 'ffmpeg.exe'), (Join-Path $bin 'ffprobe.exe') $dest
 Copy-Item (Join-Path $bin '*.dll') $dest
 Copy-Item (Join-Path $build.FullName 'LICENSE.txt') $dest
 Copy-Item (Join-Path $PSScriptRoot 'ffmpeg.json') $dest   # read by Settings > About
+Remove-Item $extract -Recurse -Force   # the verified zip stays cached; the extracted copy would double the CI cache
 Copy-Item (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') $publishDir
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $publishDir 'LICENSE.txt')
 
@@ -113,6 +114,7 @@ Step 'Packing with Velopack'
 & $vpk pack `
     --packId $PackId `
     --packVersion $Version `
+    --runtime 'win-x64' `
     --packDir $publishDir `
     --mainExe 'Clipstems.exe' `
     --packTitle 'Clipstems' `
