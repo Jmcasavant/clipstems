@@ -30,8 +30,9 @@ public static class ProtoReader
                     i += 8;
                     break;
                 case 2:
-                    int len = checked((int)ReadVarint(span, ref i));
-                    Need(span, i, len);
+                    ulong declared = ReadVarint(span, ref i);
+                    if (declared > (ulong)(span.Length - i)) throw new FormatException("Truncated protobuf message.");
+                    int len = (int)declared;
                     fields.Add(new ProtoField(number, wire, 0, message.Slice(i, len)));
                     i += len;
                     break;
@@ -62,7 +63,7 @@ public static class ProtoReader
 
     private static void Need(ReadOnlySpan<byte> span, int at, int count)
     {
-        if (at + count > span.Length) throw new FormatException("Truncated protobuf message.");
+        if (count > span.Length - at) throw new FormatException("Truncated protobuf message."); // no int overflow
     }
 }
 

@@ -7,6 +7,13 @@ namespace Clipstems.Core.Sync;
 public sealed record CorrelationResult(double LagSamples, double Peak, double RunnerUp)
 {
     public double Margin => RunnerUp <= 1e-9 ? double.PositiveInfinity : Peak / RunnerUp;
+
+    /// <summary>
+    /// The best lag is at an end of the search range. When the range is a
+    /// window around a guess, the true offset may lie beyond it, so callers
+    /// should not trust such a peak however high it is.
+    /// </summary>
+    public bool AtEdge { get; init; }
 }
 
 /// <summary>
@@ -73,7 +80,11 @@ public static class Correlator
         for (int lag = 0; lag < lags; lag++)
             if (Math.Abs(lag - best) > exclusionSamples) runnerUp = Math.Max(runnerUp, score[lag]);
 
-        return new CorrelationResult(best + ParabolicOffset(score, best), score[best], runnerUp);
+        const int edge = 2;
+        return new CorrelationResult(best + ParabolicOffset(score, best), score[best], runnerUp)
+        {
+            AtEdge = lags > 4 * edge && (best < edge || best >= lags - edge),
+        };
     }
 
     /// <summary>

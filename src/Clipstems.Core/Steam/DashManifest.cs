@@ -22,7 +22,7 @@ public sealed class DashManifest
         PresentationDuration = Duration(mpd.Attribute("mediaPresentationDuration")?.Value);
         var audio = period.Elements(Ns + "AdaptationSet")
             .Where(a => (string?)a.Attribute("contentType") == "audio" ||
-                        a.Elements(Ns + "Representation").Any(r => ((string?)r.Attribute("mimeType"))?.StartsWith("audio/") == true))
+                        a.Elements(Ns + "Representation").Any(r => ((string?)r.Attribute("mimeType"))?.StartsWith("audio/", StringComparison.Ordinal) == true))
             .SelectMany(a => a.Elements(Ns + "Representation"))
             .ToList();
         AudioRepresentations = audio.Count;
@@ -73,7 +73,15 @@ public sealed class DashManifest
         // Some manifests carry bytes after </MPD>, which XML parsers reject.
         int end = text.LastIndexOf("</MPD>", StringComparison.Ordinal);
         if (end >= 0) text = text[..(end + "</MPD>".Length)];
-        return new DashManifest(path, XDocument.Parse(text));
+        try
+        {
+            return new DashManifest(path, XDocument.Parse(text));
+        }
+        catch (System.Xml.XmlException ex)
+        {
+            // One exception type for "Steam's file is not what we expect", like the protobuf reader's.
+            throw new FormatException($"{path} is not a readable DASH manifest: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
