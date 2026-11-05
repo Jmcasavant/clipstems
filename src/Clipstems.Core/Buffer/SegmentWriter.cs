@@ -13,10 +13,13 @@ public sealed class SegmentWriter : IDisposable
     private readonly string _track;
     private readonly long _segmentFrames;
     private readonly long _gapToleranceTicks;
-    private readonly long _flushIntervalTicks;
+    private readonly long _flushIntervalMs;
     private WavWriter? _current;
     private long _currentStartTicks;
-    private long _lastFlushTicks;
+    private long _lastFlushTickCount;
+
+    /// <summary>A step back larger than this is the system clock being set, not jitter: start a new segment.</summary>
+    private static readonly long ClockStepTicks = TimeSpan.FromSeconds(1).Ticks;
 
     public SegmentWriter(SegmentStore store, string track, TimeSpan? segmentLength = null,
         TimeSpan? gapTolerance = null, TimeSpan? flushInterval = null)
@@ -25,7 +28,7 @@ public sealed class SegmentWriter : IDisposable
         _track = track;
         _segmentFrames = PcmFormat.TicksToFrames((segmentLength ?? TimeSpan.FromMinutes(1)).Ticks);
         _gapToleranceTicks = (gapTolerance ?? TimeSpan.FromMilliseconds(50)).Ticks;
-        _flushIntervalTicks = (flushInterval ?? TimeSpan.FromSeconds(1)).Ticks;
+        _flushIntervalMs = (long)(flushInterval ?? TimeSpan.FromSeconds(1)).TotalMilliseconds;
         Directory.CreateDirectory(store.TrackDirectory(track));
     }
 
@@ -68,6 +71,12 @@ public sealed class SegmentWriter : IDisposable
                     TotalFrames += gapFrames;
                 }
             }
+            else if (delta < -ClockStepTicks)
+            {
+                // The wall clock was set back (NTP, the user). Dropping audio until real time
+                // caught up would lose it; a new segment at the packet's own time keeps it.
+                CloseCurrent();
+            }
             else if (delta < -_gapToleranceTicks)
             {
                 int drop = (int)Math.Min(frames, PcmFormat.TicksToFrames(-delta));
@@ -97,18 +106,22 @@ public sealed class SegmentWriter : IDisposable
         TotalFrames += frames;
 
         if (_current.Frames >= _segmentFrames) CloseCurrent();
-        else if (utcTicks - _lastFlushTicks >= _flushIntervalTicks)
+        else if (Environment.TickCount64 - _lastFlushTickCount >= _flushIntervalMs)
         {
+            // Timed by the monotonic tick count: packet times can be flagged bad or jump.
             _current.Flush();
-            _lastFlushTicks = utcTicks;
+            _lastFlushTickCount = Environment.TickCount64;
         }
     }
 
     /// <summary>Ends the current segment; the next packet starts a new one at its own timestamp.</summary>
     public void CloseCurrent()
     {
-        _current?.Dispose();
+        // Cleared first: if closing throws (disk full), the next packet still starts a fresh segment
+        // instead of writing into a half-disposed one forever.
+        var closing = _current;
         _current = null;
+        closing?.Dispose();
     }
 
     public void Dispose() => CloseCurrent();
@@ -123,6 +136,6 @@ public sealed class SegmentWriter : IDisposable
         }
         _current = new WavWriter(path);
         _currentStartTicks = startTicks;
-        _lastFlushTicks = startTicks;
+        _lastFlushTickCount = Environment.TickCount64;
     }
 }

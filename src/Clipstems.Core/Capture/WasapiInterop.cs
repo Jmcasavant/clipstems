@@ -210,6 +210,8 @@ internal static class Wasapi
 
     public static void Check(int hr, string what)
     {
+#pragma warning disable CA2201 // COMException carries the HRESULT callers and logs need; it is the right type for interop failures
         if (hr < 0) throw new COMException($"{what} failed (0x{hr:X8}).", hr);
+#pragma warning restore CA2201
     }
 }

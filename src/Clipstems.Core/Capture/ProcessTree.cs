@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace Clipstems.Core.Capture;
 
@@ -51,9 +50,9 @@ public static class ProcessTree
         if (handle == IntPtr.Zero) return null;
         try
         {
-            var buffer = new StringBuilder(1024);
-            int size = buffer.Capacity;
-            return QueryFullProcessImageNameW(handle, 0, buffer, ref size) ? buffer.ToString(0, size) : null;
+            var buffer = new char[1024];
+            int size = buffer.Length;
+            return QueryFullProcessImageNameW(handle, 0, buffer, ref size) ? new string(buffer, 0, size) : null;
         }
         finally
         {
@@ -114,7 +113,7 @@ public static class ProcessTree
     private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref int size);
+    private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, [Out] char[] name, ref int size);
 
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);

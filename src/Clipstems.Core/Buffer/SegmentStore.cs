@@ -79,7 +79,7 @@ public sealed class SegmentStore(string root, ISegmentCodec? codec = null)
             {
                 if (!long.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var start)) continue;
                 long frames;
-                try { frames = WavFile.FrameCount(file.Length); }
+                try { frames = WavFile.FrameCount(CurrentLength(file)); }
                 catch (IOException) { continue; }
                 // The WAV is exact; it wins over a compressed copy left by an interrupted swap.
                 if (frames > 0) byStart[start] = new Segment(file.FullName, start, frames);
@@ -93,6 +93,27 @@ public sealed class SegmentStore(string root, ISegmentCodec? codec = null)
         var segments = byStart.Values.ToList();
         segments.Sort((a, b) => a.StartTicks.CompareTo(b.StartTicks));
         return segments;
+    }
+
+    /// <summary>
+    /// The file's length as of now. A directory listing's size can lag far
+    /// behind for a file another handle is still writing (NTFS updates it
+    /// lazily), which would hide most of the segment being recorded; the size
+    /// through an open handle is exact. Falls back to the listing when the file
+    /// is briefly held exclusively.
+    /// </summary>
+    private static long CurrentLength(FileInfo file)
+    {
+        try
+        {
+            using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+            return stream.Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return file.Length;
+        }
     }
 
     /// <summary>
@@ -185,6 +206,32 @@ public sealed class SegmentStore(string root, ISegmentCodec? codec = null)
                 catch (IOException) { } // still open by a reader; next pass gets it
                 catch (UnauthorizedAccessException) { }
             }
+            deleted += PruneEmpty(track, cutoffTicks);
+        }
+        return deleted;
+    }
+
+    /// <summary>
+    /// WAVs with no audio (a crash right after a segment opened) are not listed,
+    /// so the normal pass never sees them; they go once older than the cutoff.
+    /// </summary>
+    private int PruneEmpty(string track, long cutoffTicks)
+    {
+        int deleted = 0;
+        var dir = TrackDirectory(track);
+        if (!Directory.Exists(dir)) return 0;
+        foreach (var file in new DirectoryInfo(dir).EnumerateFiles("*.wav"))
+        {
+            if (!long.TryParse(System.IO.Path.GetFileNameWithoutExtension(file.Name), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var start) || start >= cutoffTicks)
+                continue;
+            try
+            {
+                if (WavFile.FrameCount(CurrentLength(file)) > 0) continue;
+                file.Delete();
+                deleted++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         return deleted;
     }

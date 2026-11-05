@@ -31,11 +31,21 @@ public sealed class CaptureSession : IDisposable
         };
         uint flags = Wasapi.StreamFlagsEventCallback | Wasapi.StreamFlagsAutoConvertPcm | Wasapi.StreamFlagsSrcDefaultQuality;
         if (loopback) flags |= Wasapi.StreamFlagsLoopback;
-        Wasapi.Check(client.Initialize(Wasapi.ShareModeShared, flags, BufferDuration, 0, ref format, IntPtr.Zero), "IAudioClient.Initialize");
-        Wasapi.Check(client.SetEventHandle(_ready.SafeWaitHandle.DangerousGetHandle()), "IAudioClient.SetEventHandle");
-        var iid = Wasapi.IidAudioCaptureClient;
-        Wasapi.Check(client.GetService(ref iid, out var service), "IAudioClient.GetService");
-        _capture = (IAudioCaptureClient)service;
+        try
+        {
+            Wasapi.Check(client.Initialize(Wasapi.ShareModeShared, flags, BufferDuration, 0, ref format, IntPtr.Zero), "IAudioClient.Initialize");
+            Wasapi.Check(client.SetEventHandle(_ready.SafeWaitHandle.DangerousGetHandle()), "IAudioClient.SetEventHandle");
+            var iid = Wasapi.IidAudioCaptureClient;
+            Wasapi.Check(client.GetService(ref iid, out var service), "IAudioClient.GetService");
+            _capture = (IAudioCaptureClient)service;
+        }
+        catch
+        {
+            // A failed open is retried every couple of seconds; release now rather than leaving it to the GC.
+            Marshal.ReleaseComObject(client);
+            _ready.Dispose();
+            throw;
+        }
     }
 
     public string Description { get; }
@@ -56,11 +66,18 @@ public sealed class CaptureSession : IDisposable
             {
                 var kind = source.Kind == SourceKind.Microphone ? DeviceKind.Input : DeviceKind.Output;
                 var device = AudioDevices.Resolve(kind, source.Device);
-                var iid = Wasapi.IidAudioClient;
-                Wasapi.Check(device.Activate(ref iid, Wasapi.ClsctxAll, IntPtr.Zero, out var client), "IMMDevice.Activate");
-                var name = AudioDevices.FriendlyName(device) ?? "unknown device";
-                return new CaptureSession((IAudioClient)client, loopback: kind == DeviceKind.Output,
-                    source.Kind == SourceKind.Microphone ? $"mic: {name}" : $"system output: {name}");
+                try
+                {
+                    var iid = Wasapi.IidAudioClient;
+                    Wasapi.Check(device.Activate(ref iid, Wasapi.ClsctxAll, IntPtr.Zero, out var client), "IMMDevice.Activate");
+                    var name = AudioDevices.FriendlyName(device) ?? "unknown device";
+                    return new CaptureSession((IAudioClient)client, loopback: kind == DeviceKind.Output,
+                        source.Kind == SourceKind.Microphone ? $"mic: {name}" : $"system output: {name}");
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(device);
+                }
             }
             case SourceKind.Application:
             {
@@ -182,9 +199,17 @@ public sealed class CaptureSession : IDisposable
                 "ActivateAudioInterfaceAsync");
             if (!handler.Completed.Wait(TimeSpan.FromSeconds(5)))
                 throw new TimeoutException("Process loopback activation did not complete within 5 s.");
-            Wasapi.Check(operation.GetActivateResult(out var activateHr, out var client), "GetActivateResult");
-            Wasapi.Check(activateHr, "Process loopback activation");
-            return (IAudioClient)client;
+            try
+            {
+                Wasapi.Check(operation.GetActivateResult(out var activateHr, out var client), "GetActivateResult");
+                Wasapi.Check(activateHr, "Process loopback activation");
+                return (IAudioClient)client;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(operation);
+                handler.Completed.Dispose();
+            }
         }
         finally
         {
