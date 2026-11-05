@@ -119,7 +119,7 @@ change with any client update.
 | Engine, CLI, tests | Done |
 | Tray app: settings, start with Windows, records while a Steam game runs, game track, device changes | Done; not yet run for a week of play |
 | Opus buffer | Done (below) |
-| Installer with bundled ffmpeg | Not started ([APP.md](APP.md), milestone 3) |
+| Installer with bundled ffmpeg, auto-updates | Done ([APP.md](APP.md), "Installer and updates"); unsigned |
 | Clips spanning several recordings | Refused with a notification |
 | Drift resampling instead of per-minute re-anchoring | Not started |
 | Mixdown "quick share", Linux/Steam Deck | Not planned yet |
@@ -129,9 +129,10 @@ change with any client update.
 - **C# on .NET 10, Windows only, classic COM interop for WASAPI.** NAudio
   can't do process loopback and drops packet QPC timestamps, which sync
   depends on.
-- **ffmpeg is an external dependency** found on PATH or set via
-  `CLIPSTEMS_FFMPEG`; the installer will bundle it. Tested with Gyan's 9.0.1
-  essentials build (`winget install Gyan.FFmpeg.Essentials`).
+- **ffmpeg runs as a separate process**, never linked. The installer bundles
+  BtbN's LGPL build (pinned in `build/ffmpeg.json`); `CLIPSTEMS_FFMPEG`
+  overrides it, and development builds use ffmpeg on PATH. Measurements here
+  used Gyan's 9.0.1 essentials build (`winget install Gyan.FFmpeg.Essentials`).
 - **Read-only toward Steam.** No writes into Steam folders and no binary
   patching; `clip.pb` field numbers are re-checked by `doctor` against the
   manifest's `Period start` (the cross-check above), so a Steam format

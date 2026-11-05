@@ -66,7 +66,7 @@ differ in sound but still correlate.
 | A user track and a ticked program name the same app | The user's single-app track wins, even switched off (so switching it off stops that app). A multi-app track ("any voice chat app") records only the first one running, so it claims no program. |
 | Chosen device unplugged | The saved device id is kept and shown as "(not connected)"; that track retries until it returns rather than moving to another device. Devices are saved by Windows endpoint id, so two mics with the same name stay distinct. |
 | ffmpeg missing | Recording continues; new clips wait unprocessed and get their tracks once ffmpeg is found, while their audio is still kept. |
-| Quit, crash or power cut while clips are queued | Queued clips are listed in `processed.log.pending` and marked processed only once handled, so the next start attaches them; their audio is kept past retention while they wait. MP4s are muxed in a temp folder and moved into place complete, so a stopped export never leaves a truncated file. |
+| Quit, crash or power cut while clips are queued | Queued clips are listed in `processed.txt.pending` and marked processed only once handled, so the next start attaches them; their audio is kept past retention while they wait. MP4s are muxed in a temp folder and moved into place complete, so a stopped export never leaves a truncated file. |
 | Disk full, a locked file, a Steam format change | Every background loop logs the error and retries; one bad clip is reported and the next one still attaches. ffmpeg runs have a time limit, so a stuck one cannot block the queue. |
 | Two copies running (tray app and `clipstems watch`) | The buffer folder is owned through an exclusive file handle; the second copy says it is waiting and takes over when the first closes. |
 | Clip Clipstems cannot handle | Spanning several recordings is refused with a notification naming the reason (support is a later milestone). |
@@ -89,6 +89,37 @@ differ in sound but still correlate.
 - Settings are JSON with a schema version, written atomically (temp file,
   then replace) so a crash never leaves a half-written file.
 
+## Installer and updates
+
+- **Velopack** (1.2.161) builds a one-click `Setup.exe` and delta updates
+  from GitHub releases. Installing needs no admin rights or UAC prompt.
+- **Install folder `%LocalAppData%\ClipstemsApp`** (packId `ClipstemsApp`),
+  deliberately not `%LocalAppData%\Clipstems`. Velopack replaces its folder on
+  install and deletes it on uninstall, and Clipstems keeps settings, logs and
+  the audio buffer in `%LocalAppData%\Clipstems`. A test guards this.
+- **Self-contained .NET.** The app carries its own runtime: about 124 MB to
+  download the first time, small deltas after. Framework-dependent would save
+  about 60 MB, but installing the .NET Desktop Runtime needs an admin prompt.
+- **FFmpeg is bundled**: BtbN's win64 LGPL shared build (FFmpeg 9.0.2, LGPL
+  v3 with libopus and libxml2), pinned with its SHA-256 in
+  `build/ffmpeg.json`. It sits in an `ffmpeg` folder next to the app and runs
+  as a separate process. `CLIPSTEMS_FFMPEG` still overrides it, and the copy on
+  PATH is used only by development builds. About shows the version and license
+  and links to the exact source; `THIRD-PARTY-NOTICES.txt` ships alongside.
+- **Updates** are checked a minute after start and every 6 hours (Settings >
+  Recording > "Download updates automatically", on by default), downloaded in
+  the background, and installed when Clipstems exits. The tray menu offers
+  "Restart to update". Recording is never interrupted for an update.
+  Pre-releases are not offered.
+- **Uninstall** removes the app, the Start-with-Windows entry, the audio
+  buffer (microphone recordings, possibly gigabytes) and temp files. Settings
+  and logs stay, so a reinstall keeps them.
+- **Code signing: not yet.** The installer is unsigned, so SmartScreen warns
+  on first run ("More info" > "Run anyway"). `build/package.ps1` signs when
+  `VPK_SIGN_PARAMS` (signtool) or `VPK_AZURE_TRUSTED_SIGN_FILE` is set. Azure
+  Trusted Signing is the low-cost route once there are users to warrant it.
+- **Releasing:** see [RELEASING.md](RELEASING.md).
+
 ## Milestones
 
 1. Engine in Core, CLI `watch` on top of it, tests. *Done.*
@@ -97,6 +128,6 @@ differ in sound but still correlate.
    single instance. *Done.*
 3. Packaging: Velopack installer and updates, bundled ffmpeg LGPL shared
    build run as a separate process with its license and source link shipped
-   in About; code signing decision. *Next.*
+   in About; code signing decision. *Done* (above; signing deferred).
 4. Compressed buffer. *Done* (see PLAN.md, "Compressed buffer").
 5. Clips spanning several recordings; mixdown "quick share".
