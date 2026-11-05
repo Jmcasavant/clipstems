@@ -1,13 +1,22 @@
 name: release
 
-# Push a tag like v0.3.0 to build the installer and publish it as a GitHub release.
-# Installed copies of Clipstems pick it up within a few hours. See docs/RELEASING.md.
+# Builds the installer and publishes it as a GitHub release, two ways:
+# - Actions > release > Run workflow, with a version (e.g. 0.3.0): builds main and creates the
+#   v<version> tag and release on that exact commit.
+# - Pushing a tag like v0.3.0 from a checkout.
+# Installed copies of Clipstems pick the release up within a few hours. See docs/RELEASING.md.
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without the v (e.g. 0.3.0, or 0.3.1-beta.1 for a pre-release)'
+        required: true
+        type: string
 
 permissions:
-  contents: write # create the release and upload its files
+  contents: write # create the tag and release, and upload its files
 
 concurrency:
   group: release
@@ -15,6 +24,8 @@ concurrency:
 
 jobs:
   release:
+    # A manual release always comes from main, never from a feature branch.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -33,6 +44,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          COMMIT: ${{ github.sha }}
         run: |
-          $version = $env:TAG.TrimStart('v')
-          ./build/package.ps1 -Version $version -DownloadPrevious -Publish
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION.Trim().TrimStart('v') } else { $env:TAG.TrimStart('v') }
+          ./build/package.ps1 -Version $version -DownloadPrevious -Publish -TargetCommitish $env:COMMIT

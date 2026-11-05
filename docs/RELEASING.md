@@ -7,7 +7,10 @@ Clipstems exits.
 ## Cut a release
 
 1. Make sure `main` is green.
-2. Tag the commit with the version (SemVer) and push the tag:
+2. In GitHub, go to Actions > release > Run workflow, keep the branch `main`,
+   and enter the version, such as `0.3.0`.
+
+   Or, from a checkout, tag the commit and push the tag:
 
    ```bash
    git tag v0.3.0
@@ -18,10 +21,11 @@ Clipstems exits.
    ```
 
 3. The `release` workflow builds, tests, and packages the release, then
-   publishes it on GitHub with `ClipstemsApp-win-Setup.exe`, a portable zip,
-   the update packages, and the update feed (`releases.win.json`).
+   publishes it on GitHub, creating the `v<version>` tag if it doesn't exist.
+   The release holds `ClipstemsApp-win-Setup.exe`, a portable zip, the update
+   packages, and the update feed (`releases.win.json`).
 
-A tag with a pre-release suffix (`v0.3.0-beta.1`) publishes a GitHub
+A version with a pre-release suffix (`0.3.0-beta.1`) publishes a GitHub
 pre-release. Installed copies don't update to pre-releases.
 
 Never delete a published release's files. Installed copies build delta
