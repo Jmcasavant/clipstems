@@ -41,7 +41,7 @@ jobs:
         with:
           path: build/.cache
           key: package-${{ hashFiles('build/ffmpeg.json', 'src/Clipstems.App/Clipstems.App.csproj') }}
-      - run: ./build/package.ps1 -Version 0.0.0-ci.${{ github.run_number }}
+      - run: ./build/package.ps1 -Version 0.0.1-ci.${{ github.run_number }}
         shell: pwsh
       - uses: actions/upload-artifact@v7
         with:

@@ -31,7 +31,7 @@ updates from the previous release.
 
 Every push and pull request runs the `package` job, which uploads
 `Clipstems-Setup-ci.<run>` as a workflow artifact for a week. That build is
-versioned `0.0.0-ci.<run>`, so the first real release replaces it through a
+versioned `0.0.1-ci.<run>` (Velopack needs at least 0.0.1), so the first real release replaces it through a
 normal update.
 
 To build locally on Windows (PowerShell 7 and the .NET 10 SDK):
