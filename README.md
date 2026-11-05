@@ -19,27 +19,30 @@ just by timestamps. Steam's clip is never modified.
 
 ## Status
 
-Works on my machine, with daily use just starting. There is no installer or
-release build yet; you build it from source. Steam's recording formats are
-undocumented, so a Steam update can break clip reading. When that happens
+Works on my machine, with daily use just starting. Steam's recording formats
+are undocumented, so a Steam update can break clip reading. When that happens
 Clipstems reports an error rather than writing a file with misaligned audio.
 
-## Requirements
+## Install
+
+Download `ClipstemsApp-win-Setup.exe` from the
+[latest release](https://github.com/Jmcasavant/clipstems/releases/latest) and
+run it. It installs for your user only (no admin prompt), includes FFmpeg,
+and keeps itself up to date. The installer isn't code-signed yet, so Windows
+SmartScreen may warn: choose "More info", then "Run anyway".
+
+Requirements:
 
 - Windows 11, or Windows 10 build 20348 or later (per-app audio capture
   needs it)
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- ffmpeg on `PATH`, for example `winget install Gyan.FFmpeg.Essentials`, or
-  its path in `CLIPSTEMS_FFMPEG`
 - Steam with Game Recording turned on
 
-## Run
+Uninstall from Settings > Apps. That removes the program and its recorded
+audio; your settings stay in `%LOCALAPPDATA%\Clipstems`.
 
-```bash
-dotnet run --project src/Clipstems.App
-```
+## What it does
 
-This starts a tray app. By default it:
+Once running, Clipstems sits in the tray. By default it:
 
 - records while a Steam game is running, and stops 30 s after it exits
 - records a Mic track (the Windows default input) and a Game track (the
@@ -89,7 +92,8 @@ details and the measurements behind them.
 
 ## Command line
 
-The CLI runs the same engine as the tray app:
+The CLI runs the same engine as the tray app. It isn't part of the
+installer; run it from a source checkout:
 
 ```bash
 dotnet run --project src/Clipstems.Cli -- doctor
@@ -116,14 +120,27 @@ For example: `--track voice=app:Discord.exe|Vesktop.exe`.
 | Output clips | `Videos\Clipstems` (changeable in settings) |
 | Settings and logs | `%LOCALAPPDATA%\Clipstems` |
 | Audio buffer | `%LOCALAPPDATA%\Clipstems\buffer`, or `CLIPSTEMS_BUFFER` |
+| The installed app | `%LOCALAPPDATA%\ClipstemsApp` |
 
 Clipstems reads Steam's files and never writes to them.
 
 ## Development
 
+Building from source needs the
+[.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), and ffmpeg on
+`PATH` (for example `winget install Gyan.FFmpeg.Essentials`) or its path in
+`CLIPSTEMS_FFMPEG`.
+
+```bash
+dotnet run --project src/Clipstems.App
+```
+
 ```bash
 dotnet test
 ```
+
+The installer is built by `build/package.ps1`;
+[docs/RELEASING.md](docs/RELEASING.md) covers releases.
 
 [docs/APP.md](docs/APP.md) covers the app's design decisions and the
 setups it handles.

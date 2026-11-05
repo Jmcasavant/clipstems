@@ -1,0 +1,39 @@
+Clipstems third-party notices
+=============================
+
+Clipstems is MIT-licensed (LICENSE.txt). It includes or uses the following
+third-party software.
+
+
+FFmpeg
+------
+The "ffmpeg" folder holds an unmodified build of FFmpeg (ffmpeg.exe,
+ffprobe.exe and their libraries), licensed under the GNU Lesser General Public
+License, version 3 or later. Its license text is ffmpeg\LICENSE.txt.
+
+Clipstems runs ffmpeg.exe and ffprobe.exe as separate programs; it does not
+link to FFmpeg's libraries. You may replace the folder's contents with another
+build of FFmpeg, or point Clipstems at one with the CLIPSTEMS_FFMPEG
+environment variable.
+
+The build, its version, and links to its exact source code and build scripts
+are listed in ffmpeg\ffmpeg.json:
+  - FFmpeg source:   https://github.com/FFmpeg/FFmpeg
+  - Build scripts:   https://github.com/BtbN/FFmpeg-Builds
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
+
+
+.NET
+----
+The .NET runtime and libraries are included under the MIT license.
+https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+
+
+Libraries
+---------
+- Velopack (installer and updates), MIT. https://github.com/velopack/velopack
+- H.NotifyIcon (tray icon), MIT. https://github.com/HavenDV/H.NotifyIcon
+- CommunityToolkit.Mvvm, MIT. https://github.com/CommunityToolkit/dotnet
+- Serilog, Serilog.Extensions.Logging, Serilog.Sinks.File, Apache-2.0.
+  https://github.com/serilog/serilog
+- Microsoft.Extensions.Logging, MIT. https://github.com/dotnet/runtime

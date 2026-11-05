@@ -1,0 +1,38 @@
+name: release
+
+# Push a tag like v0.3.0 to build the installer and publish it as a GitHub release.
+# Installed copies of Clipstems pick it up within a few hours. See docs/RELEASING.md.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write # create the release and upload its files
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/cache@v6
+        with:
+          path: build/.cache
+          key: package-${{ hashFiles('build/ffmpeg.json', 'src/Clipstems.App/Clipstems.App.csproj') }}
+      - run: dotnet build Clipstems.slnx --configuration Release
+      - run: dotnet test Clipstems.slnx --configuration Release --no-build
+      - name: Package and publish
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          ./build/package.ps1 -Version $version -DownloadPrevious -Publish

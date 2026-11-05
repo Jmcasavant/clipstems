@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Packaging downloads (FFmpeg zip, vpk); see build/package.ps1
+build/.cache/
