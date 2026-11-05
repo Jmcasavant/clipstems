@@ -11,7 +11,6 @@ using Clipstems.Core.Steam;
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
-var cli = Args.Parse(args);
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
@@ -21,6 +20,7 @@ Console.CancelKeyPress += (_, e) =>
 
 try
 {
+    var cli = Args.Parse(args);
     return cli.Command switch
     {
         "doctor" => Commands.Doctor(),
@@ -39,10 +39,12 @@ catch (OperationCanceledException)
 {
     return 130;
 }
-catch (Exception ex) when (ex is UsageException or FormatException or FfmpegException or InvalidOperationException)
+catch (Exception ex) when (ex is UsageException or ArgumentException or FormatException or FfmpegException or
+                               InvalidOperationException or IOException or UnauthorizedAccessException)
 {
+    // Expected failures (bad arguments, settings out of range, unreadable files) get one line, not a stack trace.
     Console.Error.WriteLine($"clipstems: {ex.Message}");
-    return ex is UsageException ? 2 : 1;
+    return ex is UsageException or ArgumentException ? 2 : 1;
 }
 
 namespace Clipstems.Cli
@@ -221,8 +223,8 @@ namespace Clipstems.Cli
 
         public static async Task<int> Record(Args cli, bool watch, CancellationToken cancel)
         {
-            var saved = SettingsStore.Default.Load(out _);
-            var settings = SettingsFor(cli) with
+            var saved = SettingsFor(cli);
+            var settings = saved with
             {
                 RecordWhen = (cli.Value("--when") ?? "always") switch
                 {
@@ -249,7 +251,7 @@ namespace Clipstems.Cli
             IReadOnlyList<EngineIssue> shownIssues = [];
             while (!cancel.IsCancellationRequested && DateTime.UtcNow < stopAt)
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), cancel).ContinueWith(_ => { });
+                await Task.Delay(TimeSpan.FromSeconds(1), cancel).ContinueWith(_ => { }, CancellationToken.None);
                 if (!engine.Issues.SequenceEqual(shownIssues))
                 {
                     shownIssues = engine.Issues;
@@ -358,6 +360,6 @@ namespace Clipstems.Cli
             _ => char.ToUpperInvariant(track[0]) + track[1..],
         };
 
-        private static string Local(long utcTicks) => new DateTime(utcTicks, DateTimeKind.Utc).ToLocalTime().ToString("MM-dd HH:mm:ss");
+        private static string Local(long utcTicks) => new DateTime(utcTicks, DateTimeKind.Utc).ToLocalTime().ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 }
