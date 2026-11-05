@@ -44,7 +44,7 @@ $RepoUrl = 'https://github.com/Jmcasavant/clipstems'
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $artifacts = Join-Path $root 'artifacts'
-$publish = Join-Path $artifacts 'publish'
+$publishDir = Join-Path $artifacts 'publish'
 $releases = Join-Path $artifacts 'Releases'
 $cache = Join-Path $PSScriptRoot '.cache'
 $appProject = Join-Path $root 'src/Clipstems.App/Clipstems.App.csproj'
@@ -60,9 +60,9 @@ if (-not $velopack) { throw "Clipstems.App.csproj has no Velopack package refere
 $vpkVersion = $velopack.Version
 
 Step "Publishing Clipstems $Version (self-contained, win-x64)"
-if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
+if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 dotnet publish $appProject --configuration Release --runtime win-x64 --self-contained `
-    -p:Version=$Version -p:DebugType=none --output $publish
+    -p:Version=$Version -p:DebugType=none --output $publishDir
 
 Step 'Adding FFmpeg'
 $ffmpeg = Get-Content (Join-Path $PSScriptRoot 'ffmpeg.json') -Raw | ConvertFrom-Json
@@ -83,15 +83,15 @@ if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
 Expand-Archive $zip $extract
 $build = Get-ChildItem $extract -Directory | Select-Object -First 1
 $bin = Join-Path $build.FullName 'bin'
-$dest = Join-Path $publish 'ffmpeg'
+$dest = Join-Path $publishDir 'ffmpeg'
 New-Item -ItemType Directory $dest | Out-Null
 # ffmpeg and ffprobe with their shared libraries; ffplay is not used.
 Copy-Item (Join-Path $bin 'ffmpeg.exe'), (Join-Path $bin 'ffprobe.exe') $dest
 Copy-Item (Join-Path $bin '*.dll') $dest
 Copy-Item (Join-Path $build.FullName 'LICENSE.txt') $dest
 Copy-Item (Join-Path $PSScriptRoot 'ffmpeg.json') $dest   # read by Settings > About
-Copy-Item (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') $publish
-Copy-Item (Join-Path $root 'LICENSE') (Join-Path $publish 'LICENSE.txt')
+Copy-Item (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') $publishDir
+Copy-Item (Join-Path $root 'LICENSE') (Join-Path $publishDir 'LICENSE.txt')
 
 Step "Installing vpk $vpkVersion"
 $tools = Join-Path $cache "vpk-$vpkVersion"
@@ -110,7 +110,7 @@ Step 'Packing with Velopack'
 & $vpk pack `
     --packId $PackId `
     --packVersion $Version `
-    --packDir $publish `
+    --packDir $publishDir `
     --mainExe 'Clipstems.exe' `
     --packTitle 'Clipstems' `
     --packAuthors 'Clipstems contributors' `
