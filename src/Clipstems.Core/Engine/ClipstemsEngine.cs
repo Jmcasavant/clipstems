@@ -100,6 +100,16 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     private BufferLock? _bufferLock;
     private DateTime _nextLockAttempt = DateTime.MinValue;
 
+    /// <summary>Clips queued and not yet finished, with their start time, so pruning keeps their audio.</summary>
+    private readonly Dictionary<string, long> _pendingClips = new(StringComparer.OrdinalIgnoreCase);
+    private int _disposed;
+
+    /// <summary>A loop iteration that throws is logged and retried after this, so one bad state never stops recording.</summary>
+    private static readonly TimeSpan FaultBackoff = TimeSpan.FromSeconds(5);
+    internal const string FaultMessage =
+        "Something went wrong inside Clipstems and it is retrying. If this stays, the log (About › Open logs) has details.";
+    private bool _faulted;
+
     public ClipstemsEngine(ClipstemsSettings settings, EngineOptions? options = null, ILoggerFactory? loggers = null)
     {
         _settings = SettingsStore.Validate(settings);
@@ -186,7 +196,8 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         set
         {
             _paused = value;
-            _log.LogInformation(value ? "Paused" : "Resumed");
+            if (value) _log.LogInformation("Paused");
+            else _log.LogInformation("Resumed");
         }
     }
 
@@ -209,28 +220,51 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     }
 
     /// <summary>Attaches one clip now, outside the watcher (e.g. a clip saved before Clipstems ran).</summary>
-    public void Enqueue(string clipDirectory) => _attachQueue.Writer.TryWrite(clipDirectory);
+    public void Enqueue(string clipDirectory) => QueueClip(clipDirectory);
+
+    private void QueueClip(string clipDirectory)
+    {
+        lock (_gate)
+        {
+            if (_pendingClips.ContainsKey(clipDirectory)) return; // already waiting its turn
+        }
+        long start = long.MaxValue;
+        try { start = ClipInfo.Read(clipDirectory).CoarseStartUtc.Ticks; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { } // AttachOne reports why it can't be read
+        lock (_gate) _pendingClips[clipDirectory] = start;
+        _attachQueue.Writer.TryWrite(clipDirectory);
+    }
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _stop.Cancel();
         _attachQueue.Writer.TryComplete();
-        foreach (var task in new[] { _main, _attacher, _compacting }.OfType<Task>())
+        try
         {
-            try { await task; }
-            catch (OperationCanceledException) { }
+            foreach (var task in new[] { _main, _attacher, _compacting }.OfType<Task>())
+            {
+                try { await task; }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _log.LogError(ex, "A Clipstems background task failed"); }
+            }
         }
-        StopRecorders();
-        _bufferLock?.Dispose();
-        Status = EngineStatus.Stopped;
-        _stop.Dispose();
+        finally
+        {
+            try { StopRecorders(); }
+            catch (Exception ex) { _log.LogError(ex, "Stopping the recorders failed"); }
+            _bufferLock?.Dispose();
+            Status = EngineStatus.Stopped;
+            _stop.Dispose();
+        }
     }
 
     private async Task MainLoop(CancellationToken cancel)
     {
         DefaultDeviceWatcher? devices = null;
+        // Neither of these may stop the loop below from starting: without them recording still works.
         try { devices = new DefaultDeviceWatcher(); }
-        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException)
+        catch (Exception ex)
         {
             _log.LogWarning("Default-device changes will not be followed: {Error}", ex.Message);
         }
@@ -246,43 +280,31 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         {
             while (!cancel.IsCancellationRequested)
             {
-                var now = DateTime.UtcNow;
-                if (_bufferLock is null && !TakeBuffer(now))
+                var delay = Tick;
+                try
                 {
-                    Changed?.Invoke(this, EventArgs.Empty);
-                    await Task.Delay(Tick, cancel);
-                    continue;
-                }
-                if (now >= nextSteamRefresh)
-                {
-                    RefreshSteam();
-                    RefreshIssues(loopbackOk);
-                    nextSteamRefresh = now + SteamRefreshInterval;
-                }
-                TrackGame(now);
-                ApplyRecordingPolicy(now);
-                RestartForDeviceChanges();
-                SamplePeaks();
-
-                // Without ffmpeg a clip would only fail, so new clips wait (unmarked) until it is installed.
-                if (_options.AutoAttach && _watcher is not null && now >= nextClipPoll && Ffmpeg.Locate() is not null)
-                {
-                    foreach (var clip in _watcher.ReadyClips())
+                    Iterate(DateTime.UtcNow, loopbackOk, ref nextSteamRefresh, ref nextClipPoll, ref nextPrune);
+                    if (_faulted)
                     {
-                        _watcher.MarkProcessed(clip);
-                        _attachQueue.Writer.TryWrite(clip);
+                        _faulted = false;
+                        lock (_gate) _issues = _issues.Where(i => i.Message != FaultMessage).ToList();
                     }
-                    nextClipPoll = now + ClipPollInterval;
                 }
-                if (now >= nextPrune)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    int pruned = _store.Prune(now.Ticks - TimeSpan.FromMinutes(Settings.RetentionMinutes).Ticks);
-                    if (pruned > 0) _log.LogDebug("Pruned {Count} buffer segments", pruned);
-                    nextPrune = now + TimeSpan.FromMinutes(1);
+                    // Any failure (Steam's folders unreadable, disk errors) is retried, never fatal:
+                    // a loop that dies silently would leave the tray claiming to record.
+                    _log.LogError(ex, "Engine loop failed; retrying in {Delay}", FaultBackoff);
+                    if (!_faulted)
+                    {
+                        _faulted = true;
+                        lock (_gate) _issues = [.. _issues, new(IssueSeverity.Problem, FaultMessage)];
+                    }
+                    nextSteamRefresh = DateTime.MinValue; // re-read Steam's state on the next pass
+                    delay = FaultBackoff;
                 }
-
                 Changed?.Invoke(this, EventArgs.Empty);
-                await Task.Delay(Tick, cancel);
+                await Task.Delay(delay, cancel);
             }
         }
         catch (OperationCanceledException) { }
@@ -292,14 +314,64 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         }
     }
 
-    private const string BlockedMessage =
+    private void Iterate(DateTime now, bool loopbackOk, ref DateTime nextSteamRefresh, ref DateTime nextClipPoll, ref DateTime nextPrune)
+    {
+        if (_bufferLock is null && !TakeBuffer(now)) return;
+        if (now >= nextSteamRefresh)
+        {
+            nextSteamRefresh = now + SteamRefreshInterval;
+            RefreshSteam();
+            RefreshIssues(loopbackOk);
+        }
+        TrackGame(now);
+        ApplyRecordingPolicy(now);
+        RestartForDeviceChanges();
+        SamplePeaks();
+
+        // Without ffmpeg a clip would only fail, so new clips wait (unqueued) until it is installed.
+        if (_options.AutoAttach && _watcher is not null && now >= nextClipPoll && Ffmpeg.Locate() is not null)
+        {
+            nextClipPoll = now + ClipPollInterval;
+            foreach (var clip in _watcher.TakeResumed()) QueueClip(clip);
+            foreach (var clip in _watcher.ReadyClips())
+            {
+                _watcher.MarkQueued(clip);
+                QueueClip(clip);
+            }
+        }
+        if (now >= nextPrune)
+        {
+            nextPrune = now + TimeSpan.FromMinutes(1);
+            long cutoff = now.Ticks - TimeSpan.FromMinutes(Settings.RetentionMinutes).Ticks;
+            lock (_gate)
+            {
+                // A clip waiting its turn keeps its audio, with the sync search margin to spare.
+                if (_pendingClips.Count > 0)
+                    cutoff = Math.Min(cutoff, _pendingClips.Values.Min() - TimeSpan.FromMinutes(1).Ticks);
+            }
+            int pruned = _store.Prune(cutoff);
+            if (pruned > 0) _log.LogDebug("Pruned {Count} buffer segments", pruned);
+        }
+    }
+
+    internal const string BlockedMessage =
         "Another copy of Clipstems is already recording. This one takes over when that one closes.";
 
     /// <summary>Takes the buffer folder, or reports Blocked and retries every few seconds.</summary>
     private bool TakeBuffer(DateTime now)
     {
         if (now < _nextLockAttempt) return false;
-        _bufferLock = BufferLock.TryAcquire(_options.BufferRoot);
+        try
+        {
+            _bufferLock = BufferLock.TryAcquire(_options.BufferRoot);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            _log.LogWarning("The buffer folder {Buffer} can't be opened: {Error}", _options.BufferRoot, ex.Message);
+            lock (_gate) _issues = [new(IssueSeverity.Problem, $"Clipstems can't use its buffer folder ({ex.Message}).")];
+            _nextLockAttempt = now + TimeSpan.FromSeconds(5);
+            return false;
+        }
         if (_bufferLock is not null)
         {
             lock (_gate) _issues = _issues.Where(i => i.Message != BlockedMessage).ToList();
@@ -362,6 +434,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
                 issues.Add(new(IssueSeverity.Tip,
                     "Turn on Record Microphone in Steam's Game Recording settings: Steam's track becomes a complete mix and Clipstems can line your mic track up exactly."));
         }
+        if (_faulted) issues.Add(new(IssueSeverity.Problem, FaultMessage));
         lock (_gate) _issues = issues;
     }
 
@@ -373,7 +446,8 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         _gameAppId = appId;
         _gameStartedUtc = now;
         Game = appId is { } id ? SteamGames.Describe(_steamPath, id) : null;
-        _log.LogInformation(Game is null ? "Steam game exited" : "Steam game running: {Game} ({AppId})", Game?.Name, Game?.AppId);
+        if (Game is null) _log.LogInformation("Steam game exited");
+        else _log.LogInformation("Steam game running: {Game} ({AppId})", Game.Name, Game.AppId);
     }
 
     private void ApplyRecordingPolicy(DateTime now)
@@ -389,8 +463,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
 
         if (shouldRecord && (_recorders.Count == 0 || changed))
         {
-            StopRecorders();
-            StartRecorders();
+            SyncRecorders();
         }
         else if (!shouldRecord && _recorders.Count > 0)
         {
@@ -399,21 +472,47 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         Status = _paused ? EngineStatus.Paused : shouldRecord ? EngineStatus.Recording : EngineStatus.WaitingForGame;
     }
 
-    private void StartRecorders()
+    /// <summary>
+    /// Starts recorders for tracks that should record and stops the rest.
+    /// A track whose source is unchanged keeps recording, so editing one track
+    /// never leaves a gap in the others or in the sync reference.
+    /// </summary>
+    private void SyncRecorders()
     {
-        var tracks = CurrentTracks()
-            .Select(t => (t.Id, t.Title, t.Source))
-            .Append((ReferenceTrackId, "Sync reference", new CaptureSource(SourceKind.AllExceptSelf)));
+        var wanted = CurrentTracks()
+            .Select(t => (Id: t.Id, Title: t.Title, Source: t.Source))
+            .Append((Id: ReferenceTrackId, Title: "Sync reference", Source: new CaptureSource(SourceKind.AllExceptSelf)))
+            .ToList();
+        var stopping = new List<TrackRecorder>();
+        var started = new List<string>();
         lock (_gate)
         {
-            foreach (var (id, title, source) in tracks)
+            foreach (var (id, entry) in _recorders.ToList())
             {
-                var recorder = new TrackRecorder(id, source, _store, _loggers.CreateLogger<TrackRecorder>());
-                _recorders[id] = (recorder, title);
-                recorder.Start();
+                if (wanted.Any(w => w.Id == id && w.Source.Key == entry.Recorder.Source.Key)) continue;
+                stopping.Add(entry.Recorder);
+                _recorders.Remove(id);
+                _peaks.Remove(id);
             }
         }
-        _log.LogInformation("Recording started: {Tracks}", string.Join(", ", tracks.Select(t => $"{t.Item2} ({t.Item3})")));
+        foreach (var r in stopping) r.Dispose();
+        foreach (var (id, title, source) in wanted)
+        {
+            lock (_gate)
+            {
+                if (_recorders.TryGetValue(id, out var existing))
+                {
+                    _recorders[id] = (existing.Recorder, title); // a rename needs no restart
+                    continue;
+                }
+            }
+            var recorder = new TrackRecorder(id, source, _store, _loggers.CreateLogger<TrackRecorder>());
+            lock (_gate) _recorders[id] = (recorder, title);
+            recorder.Start();
+            started.Add($"{title} ({source})");
+        }
+        if (started.Count > 0) _log.LogInformation("Recording started: {Tracks}", string.Join(", ", started));
+        if (stopping.Count > 0) _log.LogInformation("Recording stopped: {Tracks}", string.Join(", ", stopping.Select(r => r.Track)));
     }
 
     private void StopRecorders()
@@ -478,9 +577,9 @@ public sealed class ClipstemsEngine : IAsyncDisposable
                     int n = _compactor.CompactClosed(DateTime.UtcNow, cancel);
                     if (n > 0) _log.LogDebug("Compressed {Count} buffer segments", n);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _log.LogWarning("Compressing the buffer failed this pass: {Error}", ex.Message);
+                    _log.LogWarning(ex, "Compressing the buffer failed this pass");
                 }
             }
         }
@@ -495,8 +594,18 @@ public sealed class ClipstemsEngine : IAsyncDisposable
             {
                 ClipStarted?.Invoke(this, clipDir);
                 var outcome = await AttachOne(clipDir, cancel);
+                try
+                {
+                    // Marked done only once handled, so a clip interrupted by quitting is retried on the next start.
+                    _watcher?.MarkProcessed(clipDir);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _log.LogWarning("Could not record clip {Clip} as processed: {Error}", Path.GetFileName(clipDir), ex.Message);
+                }
                 lock (_gate)
                 {
+                    _pendingClips.Remove(clipDir);
                     // A retried clip replaces its earlier outcome rather than listing twice.
                     _recent.RemoveAll(r => string.Equals(r.ClipDirectory, clipDir, StringComparison.OrdinalIgnoreCase));
                     _recent.Insert(0, outcome);
@@ -528,8 +637,14 @@ public sealed class ClipstemsEngine : IAsyncDisposable
                 result = await new ClipAttacher(_store, ffmpeg).AttachAsync(clip, options, cancel);
             }
         }
-        catch (Exception ex) when (ex is IOException or FormatException or FfmpegException or UnauthorizedAccessException or InvalidOperationException)
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
+            throw; // quitting: the clip stays pending and is retried next start
+        }
+        catch (Exception ex)
+        {
+            // One unreadable clip (a Steam format change, a locked file) must never stop the clips after it.
+            _log.LogError(ex, "Attaching clip {Clip} failed", Path.GetFileName(clipDir));
             result = new AttachResult(AttachStatus.Refused, ex.Message, Problem: AttachProblem.ExportFailed);
         }
         _log.Log(result.Status == AttachStatus.Written ? LogLevel.Information : LogLevel.Warning,

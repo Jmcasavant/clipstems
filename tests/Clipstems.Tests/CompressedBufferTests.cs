@@ -216,9 +216,17 @@ public class CompressedBufferTests
         var store = new SegmentStore(dir.Path, new RawCodec());
         var wav = ClosedSegment(store, "mic", T0);
         var held = new FileStream(wav, FileMode.Open, FileAccess.ReadWrite, FileShare.None); // as during header repair
-        using var release = new Timer(_ => held.Dispose(), null, 150, Timeout.Infinite);
+        // A dedicated thread, not a thread-pool Timer: with tests running in parallel the pool can be
+        // busy long enough that a timer fires after the read has used up its ~300 ms of retries.
+        var release = new Thread(() =>
+        {
+            Thread.Sleep(150);
+            held.Dispose();
+        }) { IsBackground = true };
+        release.Start();
 
         var window = store.ReadWindow("mic", T0, 100);
+        release.Join();
         Assert.Equal(1.0, window.Coverage);
     }
 

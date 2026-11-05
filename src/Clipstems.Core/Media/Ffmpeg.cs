@@ -40,7 +40,7 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
     public async Task<byte[]> DecodeAudioMonoAsync(string input, TimeSpan maxDuration, int sampleRate, CancellationToken cancel)
     {
         using var output = new MemoryStream();
-        await RunAsync(FfmpegPath,
+        await RunAsync(FfmpegPath, DefaultLimit + maxDuration,
         [
             "-hide_banner", "-nostdin", "-loglevel", "error",
             "-i", input,
@@ -55,7 +55,7 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
     public async Task<byte[]> DecodePcmAsync(string input, CancellationToken cancel)
     {
         using var output = new MemoryStream();
-        await RunAsync(FfmpegPath,
+        await RunAsync(FfmpegPath, DefaultLimit,
         [
             "-hide_banner", "-nostdin", "-loglevel", "error",
             "-i", input, "-map", "0:a:0", "-ac", "2", "-ar", "48000", "-f", "s16le", "-",
@@ -66,14 +66,20 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
     public async Task<StreamTimes> ProbeStreamTimesAsync(string input, CancellationToken cancel)
     {
         using var output = new MemoryStream();
-        await RunAsync(FfprobePath,
+        await RunAsync(FfprobePath, DefaultLimit,
         [
             "-hide_banner", "-loglevel", "error",
             "-show_entries", "stream=codec_type,start_time", "-of", "json", input,
         ], output, cancel);
-        using var json = JsonDocument.Parse(output.ToArray());
+        JsonDocument json;
+        try { json = JsonDocument.Parse(output.ToArray()); }
+        catch (JsonException ex) { throw new FfmpegException($"ffprobe printed unreadable output: {ex.Message}"); }
+        using var _ = json;
         double? video = null, audio = null;
-        foreach (var stream in json.RootElement.GetProperty("streams").EnumerateArray())
+        if (json.RootElement.ValueKind != JsonValueKind.Object ||
+            !json.RootElement.TryGetProperty("streams", out var streams) || streams.ValueKind != JsonValueKind.Array)
+            return new StreamTimes(null, null);
+        foreach (var stream in streams.EnumerateArray())
         {
             var type = stream.TryGetProperty("codec_type", out var t) ? t.GetString() : null;
             double? start = stream.TryGetProperty("start_time", out var s) &&
@@ -85,12 +91,18 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
     }
 
     /// <summary>Runs ffmpeg with <paramref name="args"/>; throws with the tail of stderr on failure.</summary>
-    public Task RunFfmpegAsync(IReadOnlyList<string> args, CancellationToken cancel) =>
-        RunAsync(FfmpegPath, ["-hide_banner", "-nostdin", "-loglevel", "error", .. args], Stream.Null, cancel);
+    public Task RunFfmpegAsync(IReadOnlyList<string> args, CancellationToken cancel, TimeSpan? timeLimit = null) =>
+        RunAsync(FfmpegPath, timeLimit ?? DefaultLimit, ["-hide_banner", "-nostdin", "-loglevel", "error", .. args], Stream.Null, cancel);
+
+    /// <summary>
+    /// Longest a probe or decode may take. Clips attach one at a time, so an
+    /// ffmpeg that hangs (a segment Steam holds open) must not block every later clip.
+    /// </summary>
+    private static readonly TimeSpan DefaultLimit = TimeSpan.FromMinutes(2);
 
     public static string Seconds(double seconds) => seconds.ToString("0.######", CultureInfo.InvariantCulture);
 
-    private static async Task RunAsync(string exe, IReadOnlyList<string> args, Stream stdout, CancellationToken cancel)
+    private static async Task RunAsync(string exe, TimeSpan timeLimit, IReadOnlyList<string> args, Stream stdout, CancellationToken cancel)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -101,17 +113,27 @@ public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        limit.CancelAfter(timeLimit);
         using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Could not start {exe}.");
-        var stderr = process.StandardError.ReadToEndAsync(cancel);
+        var stderr = process.StandardError.ReadToEndAsync(limit.Token);
         try
         {
-            await process.StandardOutput.BaseStream.CopyToAsync(stdout, cancel);
-            await process.WaitForExitAsync(cancel);
+            await process.StandardOutput.BaseStream.CopyToAsync(stdout, limit.Token);
+            await process.WaitForExitAsync(limit.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            throw;
+            throw new FfmpegException($"{Path.GetFileName(exe)} did not finish within {timeLimit.TotalMinutes:0.#} minutes and was stopped.");
+        }
+        finally
+        {
+            // Whatever ended the wait (cancel, time limit, a failed pipe), never leave ffmpeg running.
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         }
         if (process.ExitCode != 0)
         {

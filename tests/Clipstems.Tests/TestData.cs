@@ -62,7 +62,9 @@ internal static class TestData
         return clip;
     }
 
+#pragma warning disable CA1001 // a MemoryStream holds no unmanaged resources
     internal sealed class Proto
+#pragma warning restore CA1001
     {
         private readonly MemoryStream _buffer = new();
 

@@ -68,7 +68,7 @@ public static class AudioDevices
         }
         finally
         {
-            Wasapi.PropVariantClear(ref value);
+            _ = Wasapi.PropVariantClear(ref value); // nothing useful to do if freeing fails
         }
     }
 }

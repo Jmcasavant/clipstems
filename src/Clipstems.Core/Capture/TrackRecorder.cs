@@ -22,6 +22,10 @@ public sealed class TrackRecorder : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly Thread _thread;
     private volatile bool _restart;
+    private volatile bool _started;
+
+    /// <summary>Set by whichever of <see cref="Dispose"/> and the capture thread finishes first; the second one frees the writer.</summary>
+    private int _exited;
 
     public TrackRecorder(string track, CaptureSource source, SegmentStore store, ILogger? log = null)
     {
@@ -42,7 +46,11 @@ public sealed class TrackRecorder : IDisposable
 
     public long TotalFrames => _writer.TotalFrames;
 
-    public void Start() => _thread.Start();
+    public void Start()
+    {
+        _started = true;
+        _thread.Start();
+    }
 
     /// <summary>Re-opens the source, e.g. after the Windows default device changed.</summary>
     public void Restart() => _restart = true;
@@ -50,17 +58,44 @@ public sealed class TrackRecorder : IDisposable
     /// <summary>Peak level since the last call, in dBFS; null when nothing but silence arrived.</summary>
     public double? TakePeakDbfs() => _writer.TakePeak() is var p and > 0 ? 20 * Math.Log10(p / 32768.0) : null;
 
+    /// <summary>
+    /// Stops the track. Waits a few seconds for the capture thread; a thread
+    /// still blocked opening a device frees the writer itself when it gets
+    /// out, so nothing is disposed under a thread that is still using it.
+    /// </summary>
     public void Dispose()
     {
+        if (_stop.IsCancellationRequested) return;
         _stop.Cancel();
-        if (_thread.IsAlive) _thread.Join(TimeSpan.FromSeconds(3));
-        _writer.Dispose();
+        if (_started) _thread.Join(TimeSpan.FromSeconds(5));
+        if (!_started || Interlocked.Exchange(ref _exited, 1) == 1) Release();
+    }
+
+    private void Release()
+    {
+        try { _writer.Dispose(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            _log.LogWarning("Track {Track}: closing the last segment failed: {Error}", Track, ex.Message);
+        }
         _stop.Dispose();
     }
 
     private void Loop()
     {
-        var cancel = _stop.Token;
+        try
+        {
+            Capture(_stop.Token);
+        }
+        finally
+        {
+            State = RecorderState.Stopped;
+            if (Interlocked.Exchange(ref _exited, 1) == 1) Release();
+        }
+    }
+
+    private void Capture(CancellationToken cancel)
+    {
         string? lastWait = null;
         while (!cancel.IsCancellationRequested)
         {
@@ -88,13 +123,23 @@ public sealed class TrackRecorder : IDisposable
                     return ProcessTree.IsAlive(pid);
                 }, cancel);
             }
-            catch (Exception ex) when (ex is COMException or InvalidOperationException or TimeoutException)
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
             {
-                _log.LogWarning("Track {Track}: {Error}; retrying", Track, ex.Message);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Device errors, but also a full disk or a locked buffer file: an exception
+                // escaping this thread would end the whole process, so every failure retries.
+                if (ex is COMException or InvalidOperationException or TimeoutException)
+                    _log.LogWarning("Track {Track}: {Error}; retrying", Track, ex.Message);
+                else
+                    _log.LogError(ex, "Track {Track}: recording failed; retrying", Track);
                 (State, Detail) = (RecorderState.Retrying, ex.Message);
+                try { _writer.CloseCurrent(); }
+                catch (Exception closeEx) when (closeEx is IOException or UnauthorizedAccessException or ObjectDisposedException) { }
                 cancel.WaitHandle.WaitOne(RetryDelay);
             }
         }
-        State = RecorderState.Stopped;
     }
 }

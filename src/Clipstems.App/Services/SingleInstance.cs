@@ -9,7 +9,15 @@ namespace Clipstems.App.Services;
 /// </summary>
 public sealed class SingleInstance : IDisposable
 {
-    private static readonly string Name = $"Clipstems-{Environment.UserName}";
+    // Named pipes are machine-wide while the Local\ mutex is per session, so the session id keeps
+    // the same user signed in twice (fast user switching, RDP) from signalling the wrong copy.
+    private static readonly string Name = $"Clipstems-{Environment.UserName}-{SessionId()}";
+
+    private static int SessionId()
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        return self.SessionId;
+    }
     private readonly Mutex _mutex;
     private CancellationTokenSource? _listening;
 

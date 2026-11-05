@@ -173,14 +173,18 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
                     "The buffer has no audio for this clip's time on any exported track (was Clipstems recording, and within its retention?).",
                     Sync: sync, Coverage: coverage, Duration: duration);
 
-            Directory.CreateDirectory(options.OutputDirectory);
-            var output = UniquePath(Path.Combine(options.OutputDirectory, SafeFileName(clip.Title ?? clip.Name) + ".mp4"));
             double offsetMs = (startTicks - coarseTicks) / (double)TimeSpan.TicksPerMillisecond;
             var comment = sync == SyncState.Verified
                 ? string.Create(CultureInfo.InvariantCulture, $"Clipstems sync verified: {offsetMs:+0.0;-0.0} ms from Steam metadata, correlation {correlation!.Peak:0.00}")
                 : $"Clipstems sync unverified: {syncNote}";
 
-            await ffmpeg.RunFfmpegAsync(MuxArguments(ffmpegManifest, inputs, times.AudioLead, options.AacBitrateKbps, comment, output), cancel);
+            // Muxed inside the temp folder and moved into place only once complete, so a failed or
+            // cancelled export never leaves a truncated MP4 where the user looks for clips.
+            var muxed = Path.Combine(temp, "clip.mp4");
+            await ffmpeg.RunFfmpegAsync(MuxArguments(ffmpegManifest, inputs, times.AudioLead, options.AacBitrateKbps, comment, muxed),
+                cancel, MuxTimeLimit(duration));
+            Directory.CreateDirectory(options.OutputDirectory);
+            var output = MoveToUniquePath(muxed, Path.Combine(options.OutputDirectory, SafeFileName(clip.Title ?? clip.Name) + ".mp4"));
 
             var message = sync == SyncState.Verified
                 ? $"Sync verified ({offsetMs:+0.0;-0.0} ms from Steam's metadata time)."
@@ -191,8 +195,9 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
         {
             if (!options.KeepTemp)
             {
+                // A file briefly held by antivirus or the indexer must not turn a written clip into a failure.
                 try { Directory.Delete(temp, recursive: true); }
-                catch (IOException) { }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
     }
@@ -212,7 +217,7 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
         var window = store.ReadWindow(track, startTicks - margin, PcmFormat.TicksToFrames(probeTicks + 2 * margin), cancel);
         if (window.Coverage < 0.5) return (startTicks, null);
         var match = Correlator.Locate(Downmix.ToSyncRate(window.Samples), steamProbe, exclusionSamples: Downmix.SyncRate / 100);
-        if (match is null || match.Peak < TrackMinPeak || match.Margin < TrackMinMargin) return (startTicks, null);
+        if (match is null || match.Peak < TrackMinPeak || match.Margin < TrackMinMargin || match.AtEdge) return (startTicks, null);
         long refined = startTicks - margin + (long)Math.Round(match.LagSamples * TimeSpan.TicksPerSecond / Downmix.SyncRate);
         return (refined, (refined - startTicks) / (double)TimeSpan.TicksPerMillisecond);
     }
@@ -226,7 +231,8 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
         var reference = store.ReadWindow(options.ReferenceTrack, refStart, refFrames, cancel);
         if (reference.Coverage < 0.5)
             return (coarseTicks, SyncState.Unverified, null,
-                $"reference track \"{options.ReferenceTrack}\" covers {reference.Coverage:P0} of the search window", null);
+                string.Create(CultureInfo.InvariantCulture,
+                    $"reference track \"{options.ReferenceTrack}\" covers {reference.Coverage:P0} of the search window"), null);
 
         var steamPcm = await ffmpeg.DecodeAudioMonoAsync(ffmpegManifest, probeDuration, Downmix.SyncRate, cancel);
         var probe = Downmix.FromS16Mono(steamPcm);
@@ -234,6 +240,9 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
             exclusionSamples: Downmix.SyncRate / 100);
         if (correlation is null)
             return (coarseTicks, SyncState.Unverified, null, "Steam's audio or the reference is silent", probe);
+        if (correlation.AtEdge)
+            return (coarseTicks, SyncState.Unverified, correlation,
+                $"best match is at the edge of the ±{options.SearchMargin.TotalSeconds:0} s search window, so the true offset may lie beyond it", probe);
         if (!Correlator.IsConfident(correlation))
             return (coarseTicks, SyncState.Unverified, correlation,
                 string.Create(CultureInfo.InvariantCulture,
@@ -270,16 +279,30 @@ public sealed class ClipAttacher(SegmentStore store, Ffmpeg ffmpeg)
         return cleaned.Length == 0 ? "clip" : cleaned;
     }
 
-    private static string UniquePath(string path)
+    /// <summary>A mux takes seconds per minute of clip; far longer means ffmpeg is stuck, not slow.</summary>
+    internal static TimeSpan MuxTimeLimit(TimeSpan clipDuration) => TimeSpan.FromMinutes(2) + 2 * clipDuration;
+
+    /// <summary>
+    /// Moves <paramref name="source"/> to <paramref name="path"/>, or to
+    /// "name (2).mp4" and so on when taken. Never overwrites: the move itself
+    /// fails on an existing name, so two exports racing for one name both survive.
+    /// </summary>
+    internal static string MoveToUniquePath(string source, string path)
     {
-        if (!File.Exists(path)) return path;
         var dir = Path.GetDirectoryName(path)!;
         var stem = Path.GetFileNameWithoutExtension(path);
         var ext = Path.GetExtension(path);
-        for (int n = 2; ; n++)
+        for (int n = 1; n < 10_000; n++)
         {
-            var candidate = Path.Combine(dir, $"{stem} ({n}){ext}");
-            if (!File.Exists(candidate)) return candidate;
+            var candidate = n == 1 ? path : Path.Combine(dir, $"{stem} ({n}){ext}");
+            if (File.Exists(candidate)) continue;
+            try
+            {
+                File.Move(source, candidate, overwrite: false);
+                return candidate;
+            }
+            catch (IOException) when (File.Exists(candidate)) { } // taken meanwhile; try the next name
         }
+        throw new IOException($"No free file name for {path}.");
     }
 }

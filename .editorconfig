@@ -17,3 +17,14 @@ trim_trailing_whitespace = false
 
 [Makefile]
 indent_style = tab
+
+[*.cs]
+# Analyzer suggestions that are style or micro-performance, not correctness.
+dotnet_diagnostic.CA1822.severity = suggestion # member could be static
+dotnet_diagnostic.CA1826.severity = suggestion # indexer instead of LINQ First()
+dotnet_diagnostic.CA1848.severity = suggestion # LoggerMessage delegates; logging here is not a hot path
+dotnet_diagnostic.CA1859.severity = suggestion # concrete return types
+dotnet_diagnostic.CA1873.severity = suggestion # avoid evaluating logging arguments when disabled
+
+[tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none # test names read as sentences with underscores

@@ -154,7 +154,7 @@ public static class SteamInstall
         var users = Users(steamPath);
         if (Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess", "ActiveUser", 0) is int active && active != 0)
         {
-            var match = users.FirstOrDefault(u => u.AccountId == ((uint)active).ToString());
+            var match = users.FirstOrDefault(u => u.AccountId == ((uint)active).ToString(System.Globalization.CultureInfo.InvariantCulture));
             if (match is not null) return match;
         }
         return users.OrderByDescending(u => LastWrite(Path.Combine(u.UserDataDirectory, "config", "localconfig.vdf"))).FirstOrDefault();

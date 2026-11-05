@@ -8,12 +8,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - run: dotnet test --configuration Release
+      # The whole solution, so the tray app and CLI are compiled (with analyzers, warnings as errors),
+      # not only what the tests reference.
+      - run: dotnet build Clipstems.slnx --configuration Release
+      - run: dotnet test Clipstems.slnx --configuration Release --no-build

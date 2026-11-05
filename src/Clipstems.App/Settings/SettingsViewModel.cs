@@ -137,12 +137,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Starts live updates and loads device lists (Core Audio needs an MTA thread).</summary>
     public async Task ActivateAsync()
     {
+        _deactivated = false;
         _liveTimer.Start();
         await RefreshDevicesAsync();
         try
         {
             // Created on an MTA thread like the engine's; callbacks arrive on Core Audio threads.
-            _deviceWatcher = await Task.Run(() => new DefaultDeviceWatcher());
+            var watcher = await Task.Run(() => new DefaultDeviceWatcher());
+            if (_deactivated)
+            {
+                watcher.Dispose(); // the window closed while it was being created
+                return;
+            }
+            _deviceWatcher = watcher;
             _deviceWatcher.DevicesChanged += () => _dispatcher.BeginInvoke(() =>
             {
                 _deviceRefreshTimer.Stop();
@@ -194,8 +201,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         return options;
     }
 
+    private bool _deactivated;
+
     public void Deactivate()
     {
+        _deactivated = true;
         _liveTimer.Stop();
         _deviceRefreshTimer.Stop();
         _deviceWatcher?.Dispose();
@@ -264,7 +274,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         var ids = Tracks.Select(t => t.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var stem = new string(title.ToLowerInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
-        if (stem.Length == 0 || stem.StartsWith("steam")) stem = "track";
+        if (stem.Length == 0 || stem.StartsWith("steam", StringComparison.Ordinal)) stem = "track";
         var id = stem;
         for (int n = 2; ids.Contains(id); n++) id = $"{stem}-{n}";
         var row = new TrackRowViewModel(new TrackSettings(id, title, true, source), fromSteam: false, DevicesFor(source), ScheduleApply);

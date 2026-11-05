@@ -66,6 +66,8 @@ differ in sound but still correlate.
 | A user track and a ticked program name the same app | The user's single-app track wins, even switched off (so switching it off stops that app). A multi-app track ("any voice chat app") records only the first one running, so it claims no program. |
 | Chosen device unplugged | The saved device id is kept and shown as "(not connected)"; that track retries until it returns rather than moving to another device. Devices are saved by Windows endpoint id, so two mics with the same name stay distinct. |
 | ffmpeg missing | Recording continues; new clips wait unprocessed and get their tracks once ffmpeg is found, while their audio is still kept. |
+| Quit, crash or power cut while clips are queued | Queued clips are listed in `processed.log.pending` and marked processed only once handled, so the next start attaches them; their audio is kept past retention while they wait. MP4s are muxed in a temp folder and moved into place complete, so a stopped export never leaves a truncated file. |
+| Disk full, a locked file, a Steam format change | Every background loop logs the error and retries; one bad clip is reported and the next one still attaches. ffmpeg runs have a time limit, so a stuck one cannot block the queue. |
 | Two copies running (tray app and `clipstems watch`) | The buffer folder is owned through an exclusive file handle; the second copy says it is waiting and takes over when the first closes. |
 | Clip Clipstems cannot handle | Spanning several recordings is refused with a notification naming the reason (support is a later milestone). |
 

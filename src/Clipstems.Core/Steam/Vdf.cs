@@ -67,10 +67,17 @@ public static class Vdf
             }
             var key = ReadToken(s, ref i);
             SkipTrivia(s, ref i);
+            // A conditional can also sit between a key and its block: "key" [$WIN32] { ... }
+            if (i < s.Length && s[i] == '[')
+            {
+                SkipConditional(s, ref i);
+                SkipTrivia(s, ref i);
+            }
             if (i < s.Length && s[i] == '{')
             {
                 i++;
                 nodes.Add(new VdfNode(key, null, ParseBlock(s, ref i, topLevel: false)));
+                SkipConditional(s, ref i);
             }
             else
             {
@@ -106,7 +113,7 @@ public static class Vdf
         return sb.ToString();
     }
 
-    /// <summary>Skips a trailing platform conditional such as <c>[$WIN32]</c>.</summary>
+    /// <summary>Skips a platform conditional such as <c>[$WIN32]</c> or <c>[!$OSX]</c> on the current line.</summary>
     private static void SkipConditional(string s, ref int i)
     {
         int j = i;

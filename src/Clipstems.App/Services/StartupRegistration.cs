@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.Win32;
 
 namespace Clipstems.App.Services;
@@ -33,16 +34,24 @@ public static class StartupRegistration
     public static string? Apply(bool enabled)
     {
         if (IsDevelopmentBuild) return "Development builds do not register to start with Windows.";
-        using var key = Registry.CurrentUser.CreateSubKey(RunKey);
-        if (enabled)
+        try
         {
-            var command = $"\"{Environment.ProcessPath}\" {Program.BackgroundSwitch}";
-            if (key.GetValue(ValueName) as string != command) key.SetValue(ValueName, command);
+            using var key = Registry.CurrentUser.CreateSubKey(RunKey);
+            if (enabled)
+            {
+                var command = $"\"{Environment.ProcessPath}\" {Program.BackgroundSwitch}";
+                if (key.GetValue(ValueName) as string != command) key.SetValue(ValueName, command);
+            }
+            else if (key.GetValue(ValueName) is not null)
+            {
+                key.DeleteValue(ValueName, throwOnMissingValue: false);
+            }
+            return null;
         }
-        else if (key.GetValue(ValueName) is not null)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
         {
-            key.DeleteValue(ValueName);
+            // Some managed PCs block the Run key by policy; recording works either way.
+            return $"Start with Windows could not be changed: {ex.Message}";
         }
-        return null;
     }
 }

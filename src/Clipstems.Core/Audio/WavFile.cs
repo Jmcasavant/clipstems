@@ -99,8 +99,16 @@ public sealed class WavWriter : IDisposable
 
     public void Dispose()
     {
-        _stream.Position = 0;
-        WavFile.WriteHeader(_stream, _dataBytes);
-        _stream.Dispose();
+        try
+        {
+            _stream.Position = 0;
+            WavFile.WriteHeader(_stream, _dataBytes);
+        }
+        finally
+        {
+            // Released even when the header can't be written (disk full); readers then size the
+            // segment from its length, and the compactor repairs the header.
+            _stream.Dispose();
+        }
     }
 }
