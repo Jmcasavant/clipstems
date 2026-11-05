@@ -54,10 +54,10 @@ function Step([string]$text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Version '$Version' is not SemVer 2 (e.g. 0.3.0 or 0.3.0-beta.1)." }
 
 # vpk must be the same version as the Velopack library the app is built with.
-$velopack = ([xml](Get-Content $appProject)).Project.ItemGroup.PackageReference |
-    Where-Object { $_.Include -eq 'Velopack' } | Select-Object -First 1
+$velopack = Select-Xml -Path $appProject -XPath "//PackageReference[@Include='Velopack']" | Select-Object -First 1
 if (-not $velopack) { throw "Clipstems.App.csproj has no Velopack package reference." }
-$vpkVersion = $velopack.Version
+$vpkVersion = $velopack.Node.GetAttribute('Version')
+if (-not $vpkVersion) { throw "The Velopack package reference in Clipstems.App.csproj has no Version." }
 
 Step "Publishing Clipstems $Version (self-contained, win-x64)"
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
@@ -80,7 +80,9 @@ if ($actual -ne $ffmpeg.sha256) {
 }
 $extract = Join-Path $cache 'ffmpeg-extract'
 if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-Expand-Archive $zip $extract
+New-Item -ItemType Directory $extract | Out-Null
+# Windows' bsdtar reads zips and, unlike Expand-Archive, takes a few seconds for this one; only bin/ and the license are needed.
+tar -xf $zip -C $extract '*/bin/*' '*/LICENSE.txt'
 $build = Get-ChildItem $extract -Directory | Select-Object -First 1
 $bin = Join-Path $build.FullName 'bin'
 $dest = Join-Path $publishDir 'ffmpeg'
@@ -102,8 +104,9 @@ $vpk = Join-Path $tools ($IsWindows ? 'vpk.exe' : 'vpk')
 
 if ($DownloadPrevious) {
     Step 'Downloading the previous release for a delta update'
-    $tokenArgs = if ($env:GITHUB_TOKEN) { @('--token', $env:GITHUB_TOKEN) } else { @() }
-    & $vpk download github --repoUrl $RepoUrl --outputDir $releases @tokenArgs
+    $downloadArgs = @('download', 'github', '--repoUrl', $RepoUrl, '--outputDir', $releases)
+    if ($env:GITHUB_TOKEN) { $downloadArgs += @('--token', $env:GITHUB_TOKEN) }
+    & $vpk @downloadArgs
 }
 
 Step 'Packing with Velopack'
@@ -121,9 +124,10 @@ Step 'Packing with Velopack'
 if ($Publish) {
     if (-not $env:GITHUB_TOKEN) { throw 'Publishing needs GITHUB_TOKEN.' }
     Step "Publishing release v$Version to GitHub"
-    $preArgs = if ($Version.Contains('-')) { @('--pre') } else { @() }
-    & $vpk upload github --repoUrl $RepoUrl --outputDir $releases --token $env:GITHUB_TOKEN `
-        --publish --tag "v$Version" --releaseName "Clipstems $Version" @preArgs
+    $uploadArgs = @('upload', 'github', '--repoUrl', $RepoUrl, '--outputDir', $releases, '--token', $env:GITHUB_TOKEN,
+        '--publish', '--tag', "v$Version", '--releaseName', "Clipstems $Version")
+    if ($Version.Contains('-')) { $uploadArgs += '--pre' }
+    & $vpk @uploadArgs
 }
 
 Step 'Done'
