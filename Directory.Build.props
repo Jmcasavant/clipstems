@@ -5,5 +5,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The .NET analyzers' recommended set (culture, disposal, interop, logging rules), as errors.
+         Rules that only suggest micro-optimizations are turned down in .editorconfig. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
 </Project>
