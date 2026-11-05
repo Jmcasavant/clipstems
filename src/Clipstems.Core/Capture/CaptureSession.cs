@@ -120,7 +120,7 @@ public sealed class CaptureSession : IDisposable
             error = null;
             return true;
         }
-        catch (Exception ex) when (ex is COMException or TimeoutException or EntryPointNotFoundException)
+        catch (Exception ex) // COM errors, timeouts, a missing entry point on old Windows, no audio service at all
         {
             error = ex.Message;
             return false;
@@ -185,6 +185,7 @@ public sealed class CaptureSession : IDisposable
         // AUDIOCLIENT_ACTIVATION_PARAMS { ActivationType; { TargetProcessId; ProcessLoopbackMode } }
         IntPtr parameters = Marshal.AllocHGlobal(12);
         IntPtr variant = Marshal.AllocHGlobal(Marshal.SizeOf<PropVariant>());
+        bool abandoned = false;
         try
         {
             Marshal.WriteInt32(parameters, 0, Wasapi.ActivationTypeProcessLoopback);
@@ -198,7 +199,11 @@ public sealed class CaptureSession : IDisposable
             Wasapi.Check(Wasapi.ActivateAudioInterfaceAsync(Wasapi.ProcessLoopbackDevice, ref iid, variant, handler, out var operation),
                 "ActivateAudioInterfaceAsync");
             if (!handler.Completed.Wait(TimeSpan.FromSeconds(5)))
+            {
+                // Windows may still be reading the parameters; leaking 36 bytes beats a use-after-free.
+                abandoned = true;
                 throw new TimeoutException("Process loopback activation did not complete within 5 s.");
+            }
             try
             {
                 Wasapi.Check(operation.GetActivateResult(out var activateHr, out var client), "GetActivateResult");
@@ -213,8 +218,11 @@ public sealed class CaptureSession : IDisposable
         }
         finally
         {
-            Marshal.FreeHGlobal(variant);
-            Marshal.FreeHGlobal(parameters);
+            if (!abandoned)
+            {
+                Marshal.FreeHGlobal(variant);
+                Marshal.FreeHGlobal(parameters);
+            }
         }
     }
 

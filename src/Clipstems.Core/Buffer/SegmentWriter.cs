@@ -16,6 +16,9 @@ public sealed class SegmentWriter : IDisposable
     private readonly long _flushIntervalMs;
     private WavWriter? _current;
     private long _currentStartTicks;
+
+    /// <summary>Where the last closed segment ended, for placing a packet whose timestamp Windows flagged bad.</summary>
+    private long _lastEndTicks;
     private long _lastFlushTickCount;
 
     /// <summary>A step back larger than this is the system clock being set, not jitter: start a new segment.</summary>
@@ -89,7 +92,13 @@ public sealed class SegmentWriter : IDisposable
 
         if (_current is null)
         {
-            if (!timestampValid) utcTicks = DateTime.UtcNow.Ticks;
+            if (!timestampValid)
+            {
+                // Continue where the last segment ended when that is plausibly now (a rollover);
+                // otherwise "now" is the best guess, late by at most the capture latency.
+                long now = DateTime.UtcNow.Ticks;
+                utcTicks = _lastEndTicks > 0 && Math.Abs(now - _lastEndTicks) < TimeSpan.TicksPerSecond ? _lastEndTicks : now;
+            }
             Open(utcTicks);
         }
 
@@ -121,7 +130,9 @@ public sealed class SegmentWriter : IDisposable
         // instead of writing into a half-disposed one forever.
         var closing = _current;
         _current = null;
-        closing?.Dispose();
+        if (closing is null) return;
+        _lastEndTicks = _currentStartTicks + PcmFormat.FramesToTicks(closing.Frames);
+        closing.Dispose();
     }
 
     public void Dispose() => CloseCurrent();

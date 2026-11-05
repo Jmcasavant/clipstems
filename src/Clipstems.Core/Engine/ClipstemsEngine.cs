@@ -106,7 +106,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
 
     /// <summary>A loop iteration that throws is logged and retried after this, so one bad state never stops recording.</summary>
     private static readonly TimeSpan FaultBackoff = TimeSpan.FromSeconds(5);
-    private const string FaultMessage =
+    internal const string FaultMessage =
         "Something went wrong inside Clipstems and it is retrying. If this stays, the log (About › Open logs) has details.";
     private bool _faulted;
 
@@ -262,8 +262,9 @@ public sealed class ClipstemsEngine : IAsyncDisposable
     private async Task MainLoop(CancellationToken cancel)
     {
         DefaultDeviceWatcher? devices = null;
+        // Neither of these may stop the loop below from starting: without them recording still works.
         try { devices = new DefaultDeviceWatcher(); }
-        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException)
+        catch (Exception ex)
         {
             _log.LogWarning("Default-device changes will not be followed: {Error}", ex.Message);
         }
@@ -353,7 +354,7 @@ public sealed class ClipstemsEngine : IAsyncDisposable
         }
     }
 
-    private const string BlockedMessage =
+    internal const string BlockedMessage =
         "Another copy of Clipstems is already recording. This one takes over when that one closes.";
 
     /// <summary>Takes the buffer folder, or reports Blocked and retries every few seconds.</summary>
