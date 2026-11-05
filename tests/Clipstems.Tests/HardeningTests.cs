@@ -1,4 +1,4 @@
-using System.Text;
+using System.Xml.Linq;
 using Clipstems.Core;
 using Clipstems.Core.Audio;
 using Clipstems.Core.Buffer;
@@ -185,5 +185,96 @@ public class HardeningTests
     {
         Assert.True(ClipAttacher.MuxTimeLimit(TimeSpan.FromMinutes(10)) > ClipAttacher.MuxTimeLimit(TimeSpan.FromSeconds(20)));
         Assert.True(ClipAttacher.MuxTimeLimit(TimeSpan.Zero) >= TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void Vdf_conditional_between_a_key_and_its_block_is_skipped()
+    {
+        var root = Vdf.Parse("""
+            "a"
+            {
+                "win" [$WIN32]
+                {
+                    "k" "v"
+                }
+                "after" "1"
+            }
+            """);
+
+        Assert.Equal("v", root.Find("win")!["k"]);
+        Assert.Equal("1", root.Child("a")!["after"]);
+    }
+
+    [Theory]
+    [InlineData("chunk-stream$RepresentationID$-$Number%05d$.m4s", "1", "chunk-stream1-*.m4s")]
+    [InlineData("seg_$RepresentationID$_$Number$.m4s", "audio", "seg_audio_*.m4s")]
+    [InlineData("$RepresentationID$/$Number$.m4s", "1", null)]   // segments in a sub-folder: unknown layout
+    [InlineData("chunk-$Bandwidth$-$Number$.m4s", "1", null)]    // an identifier this reader doesn't fill in
+    [InlineData(null, "1", "chunk-stream1-*.m4s")]                // no media attribute: Steam's naming
+    public void Segment_file_pattern_follows_the_manifest_template(string? media, string id, string? expected)
+    {
+        Assert.Equal(expected, DashManifest.ChunkPattern(media, id));
+    }
+
+    [Fact]
+    public void A_segment_template_on_the_adaptation_set_is_used()
+    {
+        using var dir = new TempDir();
+        var path = Path.Combine(dir.Path, "session.mpd");
+        // Move the audio template up from the Representation to its AdaptationSet.
+        var manifest = TestData.Manifest();
+        int audioSet = manifest.IndexOf("contentType=\"audio\"", StringComparison.Ordinal);
+        int start = manifest.IndexOf("<SegmentTemplate", audioSet, StringComparison.Ordinal);
+        int end = manifest.IndexOf("/>", start, StringComparison.Ordinal) + 2;
+        var template = manifest[start..end];
+        manifest = manifest.Remove(start, end - start);
+        int setOpen = manifest.IndexOf('>', audioSet) + 1;
+        manifest = manifest.Insert(setOpen, template);
+        File.WriteAllText(path, manifest);
+        for (int i = 1; i <= 9; i++) File.WriteAllBytes(Path.Combine(dir.Path, $"chunk-stream1-{i:00000}.m4s"), []);
+
+        Assert.Equal(TimeSpan.FromSeconds(27), DashManifest.Load(path).AvailableDuration);
+    }
+
+    [Fact]
+    public void Segments_in_a_folder_with_a_hash_are_copied_for_ffmpeg()
+    {
+        // ffmpeg's DASH demuxer reads '#' in a BaseURL as a fragment and loses the rest of the path.
+        using var dir = new TempDir();
+        var clipDir = Path.Combine(dir.Path, "Clips #1", "bg");
+        Directory.CreateDirectory(clipDir);
+        var path = Path.Combine(clipDir, "session.mpd");
+        File.WriteAllText(path, TestData.Manifest());
+        File.WriteAllBytes(Path.Combine(clipDir, "init-stream1.m4s"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(clipDir, "chunk-stream1-00001.m4s"), [4, 5]);
+        var temp = Path.Combine(dir.Path, "temp");
+        Directory.CreateDirectory(temp);
+
+        DashManifest.Load(path).WriteFfmpegCopy(Path.Combine(temp, "session.mpd"));
+
+        XNamespace ns = "urn:mpeg:dash:schema:mpd:2011";
+        var baseUrl = XDocument.Load(Path.Combine(temp, "session.mpd")).Root!.Element(ns + "BaseURL")!.Value;
+        Assert.DoesNotContain("#", baseUrl);
+        Assert.Equal(Path.Combine(temp, "segments").Replace('\\', '/') + "/", baseUrl);
+        Assert.Equal([1, 2, 3], File.ReadAllBytes(Path.Combine(temp, "segments", "init-stream1.m4s")));
+        Assert.True(File.Exists(Path.Combine(temp, "segments", "chunk-stream1-00001.m4s")));
+    }
+
+    [Fact]
+    public void A_bad_timestamp_after_a_rollover_continues_where_the_last_segment_ended()
+    {
+        using var dir = new TempDir();
+        var store = new SegmentStore(dir.Path);
+        var oneSecond = new byte[48_000 * PcmFormat.BlockAlign];
+        long start = DateTime.UtcNow.Ticks - TimeSpan.TicksPerSecond;
+        using (var writer = new SegmentWriter(store, "mic", segmentLength: TimeSpan.FromSeconds(1)))
+        {
+            writer.Write(oneSecond, start, silent: false);                        // fills and closes segment 1
+            writer.Write(oneSecond, 0, silent: false, timestampValid: false);    // Windows flagged this packet's time
+        }
+
+        var segments = store.List("mic");
+        Assert.Equal(2, segments.Count);
+        Assert.Equal(segments[0].EndTicks, segments[1].StartTicks);
     }
 }
