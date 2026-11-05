@@ -28,7 +28,10 @@ param(
     # Upload the result as a GitHub release tagged v<Version> (needs GITHUB_TOKEN with contents: write).
     # A version with a pre-release suffix (0.3.0-beta.1) is published as a pre-release, which
     # installed copies ignore.
-    [switch]$Publish
+    [switch]$Publish,
+
+    # The commit the release's tag points at when the tag doesn't exist yet (a manual release).
+    [string]$TargetCommitish
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,7 +110,13 @@ if ($DownloadPrevious) {
     Step 'Downloading the previous release for a delta update'
     $downloadArgs = @('download', 'github', '--repoUrl', $RepoUrl, '--outputDir', $releases)
     if ($env:GITHUB_TOKEN) { $downloadArgs += @('--token', $env:GITHUB_TOKEN) }
-    & $vpk @downloadArgs
+    try {
+        & $vpk @downloadArgs
+    }
+    catch {
+        # The first release has nothing to download, and a delta is only an optimization: carry on with a full package.
+        Write-Warning "No previous release downloaded, so this release has no delta package: $($_.Exception.Message)"
+    }
 }
 
 Step 'Packing with Velopack'
@@ -129,6 +138,7 @@ if ($Publish) {
     $uploadArgs = @('upload', 'github', '--repoUrl', $RepoUrl, '--outputDir', $releases, '--token', $env:GITHUB_TOKEN,
         '--publish', '--tag', "v$Version", '--releaseName', "Clipstems $Version")
     if ($Version.Contains('-')) { $uploadArgs += '--pre' }
+    if ($TargetCommitish) { $uploadArgs += @('--targetCommitish', $TargetCommitish) }
     & $vpk @uploadArgs
 }
 
