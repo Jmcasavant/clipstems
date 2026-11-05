@@ -37,6 +37,9 @@ public sealed record ClipstemsSettings
     /// </summary>
     public bool MirrorSteamPrograms { get; init; } = true;
     public bool Notifications { get; init; } = true;
+
+    /// <summary>Download new versions in the background and install them when Clipstems next restarts (installed copies only).</summary>
+    public bool AutoUpdate { get; init; } = true;
     public IReadOnlyList<TrackSettings> Tracks { get; init; } = DefaultTracks;
 
     [JsonIgnore]

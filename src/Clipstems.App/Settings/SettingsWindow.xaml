@@ -148,6 +148,11 @@
                     <TextBlock Style="{StaticResource Hint}" Margin="28,0,0,4" Text="Development builds don't register themselves."
                                Visibility="{Binding IsDevelopmentBuild, Converter={StaticResource Visible}}" />
                     <CheckBox IsChecked="{Binding Notifications}" Content="Show a notification when a clip gets its tracks" />
+                    <CheckBox IsChecked="{Binding AutoUpdate}" Content="Download updates automatically"
+                              Visibility="{Binding UpdatesAvailable, Converter={StaticResource Visible}}" />
+                    <TextBlock Style="{StaticResource Hint}" Margin="28,0,0,4"
+                               Visibility="{Binding UpdatesAvailable, Converter={StaticResource Visible}}"
+                               Text="A downloaded update installs the next time Clipstems restarts; recording is never interrupted for one." />
                 </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -196,8 +201,17 @@
                         <Run Text="Clipstems" /> <Run Text="{Binding Version, Mode=OneWay}" />
                     </TextBlock>
                     <TextBlock Style="{StaticResource Hint}" Text="Adds separate audio tracks to Steam Game Recording clips." />
-                    <TextBlock Style="{StaticResource SectionHeader}" Text="ffmpeg" />
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Updates" />
+                    <TextBlock Style="{StaticResource Hint}" Text="{Binding UpdateStatus, Mode=OneWay}" />
+                    <Button Content="Check now" Command="{Binding CheckForUpdatesCommand}" HorizontalAlignment="Left" Margin="0,6,0,0"
+                            Visibility="{Binding UpdatesAvailable, Converter={StaticResource Visible}}" />
+
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="FFmpeg" />
                     <TextBlock Style="{StaticResource Hint}" Text="{Binding FfmpegStatus, Mode=OneWay}" />
+                    <WrapPanel Margin="0,6,0,0" Visibility="{Binding FfmpegIsBundled, Converter={StaticResource Visible}}">
+                        <Button Content="FFmpeg license" Command="{Binding OpenFfmpegLicenseCommand}" Margin="0,0,8,0" />
+                        <Button Content="FFmpeg source code" Command="{Binding OpenFfmpegSourceCommand}" />
+                    </WrapPanel>
                     <TextBlock Style="{StaticResource SectionHeader}" Text="Files" />
                     <WrapPanel>
                         <Button Content="Open data folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" />

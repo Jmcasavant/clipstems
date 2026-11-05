@@ -1,4 +1,5 @@
 using Clipstems.App.Services;
+using Velopack;
 
 namespace Clipstems.App;
 
@@ -10,6 +11,12 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // First, before anything else: the installer and updater run this exe with hook
+        // arguments, and Run() handles those and exits. A normal launch returns at once.
+        VelopackApp.Build()
+            .OnBeforeUninstallFastCallback(_ => Uninstall.CleanUp())
+            .Run();
+
         using var instance = SingleInstance.TryAcquire();
         if (instance is null)
         {

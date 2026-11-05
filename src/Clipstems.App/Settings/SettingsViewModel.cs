@@ -40,6 +40,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private readonly ClipstemsEngine _engine;
     private readonly SettingsStore _store;
+    private readonly Updater _updater;
     private readonly ILogger _log;
     private readonly DispatcherTimer _applyTimer;
     private readonly DispatcherTimer _liveTimer;
@@ -50,10 +51,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     private IReadOnlyList<DeviceOption> _inputs = [new("Windows default", null)];
     private IReadOnlyList<DeviceOption> _outputs = [new("Windows default", null)];
 
-    public SettingsViewModel(ClipstemsEngine engine, SettingsStore store, ILogger log, string? loadProblem)
+    public SettingsViewModel(ClipstemsEngine engine, SettingsStore store, Updater updater, ILogger log, string? loadProblem)
     {
         _engine = engine;
         _store = store;
+        _updater = updater;
         _log = log;
         _applyTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _applyTimer.Tick += (_, _) =>
@@ -77,6 +79,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         OutputFolder = s.EffectiveOutputFolder;
         StartWithWindows = s.StartWithWindows;
         Notifications = s.Notifications;
+        AutoUpdate = s.AutoUpdate;
+        UpdateStatus = updater.Status;
         MirrorSteamPrograms = s.MirrorSteamPrograms;
         RebuildRows();
         Message = loadProblem;
@@ -110,7 +114,43 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public string Version => typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3) ?? "?";
     public string DataFolder => ClipstemsPaths.DataRoot;
-    public string FfmpegStatus => Ffmpeg.Locate() is { } f ? $"Found at {f.FfmpegPath}" : "Not found. Install it with: winget install Gyan.FFmpeg.Essentials";
+    public string FfmpegStatus => Ffmpeg.Locate() switch
+    {
+        { IsBundled: true } => BundledFfmpeg.Read() is { } info
+            ? $"Included: FFmpeg {info.Version}, licensed under the {info.License} and run as a separate program."
+            : "Included with Clipstems and run as a separate program.",
+        { } other => $"Using {other.FfmpegPath}",
+        null => "Not found. Reinstall Clipstems, or install FFmpeg with: winget install Gyan.FFmpeg.Essentials",
+    };
+
+    public bool FfmpegIsBundled => Ffmpeg.Locate()?.IsBundled == true;
+
+    [RelayCommand]
+    private void OpenFfmpegLicense()
+    {
+        if (BundledFfmpeg.LicensePath is { } license) Shell.Open(license);
+    }
+
+    [RelayCommand]
+    private void OpenFfmpegSource()
+    {
+        if (BundledFfmpeg.Read()?.Source is { } url) Shell.OpenUri(url);
+    }
+
+    public bool UpdatesAvailable => _updater.IsInstalled;
+
+    [ObservableProperty] public partial bool AutoUpdate { get; set; }
+    partial void OnAutoUpdateChanged(bool value) => ScheduleApply();
+
+    [ObservableProperty] public partial string UpdateStatus { get; set; } = "";
+
+    [RelayCommand]
+    private async Task CheckForUpdates()
+    {
+        UpdateStatus = "Checking for updates…";
+        await _updater.CheckAsync(manual: true);
+        UpdateStatus = _updater.Status;
+    }
     public bool IsDevelopmentBuild => StartupRegistration.IsDevelopmentBuild;
 
     partial void OnRecordOnlyDuringGamesChanged(bool value) => ScheduleApply();
@@ -301,6 +341,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             : string.Equals(OutputFolder, ClipstemsPaths.DefaultOutput, StringComparison.OrdinalIgnoreCase) ? null : OutputFolder,
         StartWithWindows = StartWithWindows,
         Notifications = Notifications,
+        AutoUpdate = AutoUpdate,
         MirrorSteamPrograms = MirrorSteamPrograms,
         Tracks = Tracks.Where(t => !t.IsFromSteam).Select(t => t.ToSettings()).ToList(),
     };
@@ -440,6 +481,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private void RefreshLive()
     {
+        UpdateStatus = _updater.Status;
         EngineStatus = _engine.Status switch
         {
             Core.Engine.EngineStatus.Recording => _engine.Game is { } g ? $"Recording · {g.Name}" : "Recording",

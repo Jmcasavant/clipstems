@@ -16,25 +16,51 @@ public sealed record StreamTimes(double? VideoStart, double? AudioStart)
     public double AudioLead => AudioStart is { } a ? a - Math.Min(a, VideoStart ?? a) : 0;
 }
 
-/// <summary>Runs the ffmpeg and ffprobe executables. Clipstems does not ship its own codecs.</summary>
+/// <summary>
+/// Runs the ffmpeg and ffprobe executables as separate processes. Installed
+/// copies of Clipstems carry an LGPL build of FFmpeg in an <c>ffmpeg</c>
+/// folder next to the app; Clipstems itself links no codecs.
+/// </summary>
 public sealed class Ffmpeg(string ffmpegPath, string ffprobePath)
 {
+    /// <summary>The folder, next to the app, that the installer puts FFmpeg in.</summary>
+    public const string BundledFolderName = "ffmpeg";
+
     public string FfmpegPath { get; } = ffmpegPath;
     public string FfprobePath { get; } = ffprobePath;
 
+    /// <summary>True when this is the copy shipped with Clipstems.</summary>
+    public bool IsBundled { get; init; }
+
     /// <summary>
-    /// <c>CLIPSTEMS_FFMPEG</c> (path to ffmpeg.exe) if set, else ffmpeg on PATH,
-    /// with ffprobe beside it. Null when either is missing.
+    /// <c>CLIPSTEMS_FFMPEG</c> (path to ffmpeg.exe) if set, else the copy
+    /// bundled with Clipstems, else ffmpeg on PATH; ffprobe is taken from the
+    /// same folder. Null when either is missing.
     /// </summary>
-    public static Ffmpeg? Locate()
+    public static Ffmpeg? Locate() => Locate(AppContext.BaseDirectory);
+
+    internal static Ffmpeg? Locate(string appDirectory)
     {
         var configured = Environment.GetEnvironmentVariable("CLIPSTEMS_FFMPEG");
-        var ffmpeg = !string.IsNullOrEmpty(configured) && File.Exists(configured) ? configured : FindOnPath("ffmpeg.exe");
-        if (ffmpeg is null) return null;
-        var probe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, "ffprobe.exe");
-        if (!File.Exists(probe)) probe = FindOnPath("ffprobe.exe") ?? "";
-        return File.Exists(probe) ? new Ffmpeg(ffmpeg, probe) : null;
+        if (!string.IsNullOrEmpty(configured) && File.Exists(configured))
+            return Pair(configured, bundled: false) ?? Pair(configured, FindOnPath("ffprobe.exe"));
+
+        // The bundled copy wins over PATH: it is the build Clipstems was tested with.
+        if (Pair(Path.Combine(appDirectory, BundledFolderName, "ffmpeg.exe"), bundled: true) is { } bundled) return bundled;
+
+        return FindOnPath("ffmpeg.exe") is { } onPath ? Pair(onPath, bundled: false) ?? Pair(onPath, FindOnPath("ffprobe.exe")) : null;
     }
+
+    /// <summary>ffmpeg with the ffprobe in its own folder, or null when either is missing.</summary>
+    private static Ffmpeg? Pair(string ffmpeg, bool bundled)
+    {
+        if (!File.Exists(ffmpeg)) return null;
+        var probe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, "ffprobe.exe");
+        return File.Exists(probe) ? new Ffmpeg(ffmpeg, probe) { IsBundled = bundled } : null;
+    }
+
+    private static Ffmpeg? Pair(string ffmpeg, string? probe) =>
+        probe is not null && File.Exists(probe) ? new Ffmpeg(ffmpeg, probe) : null;
 
     /// <summary>Decodes the first audio stream to 16-bit mono at <paramref name="sampleRate"/>.</summary>
     public async Task<byte[]> DecodeAudioMonoAsync(string input, TimeSpan maxDuration, int sampleRate, CancellationToken cancel)

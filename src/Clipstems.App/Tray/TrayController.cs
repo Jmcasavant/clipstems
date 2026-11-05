@@ -20,14 +20,18 @@ public sealed class TrayController : IDisposable
     private readonly ClipstemsEngine _engine;
     private readonly Action _openSettings;
     private readonly Action _quit;
+    private readonly Updater _updater;
+    private readonly Action _restartToUpdate;
     private readonly TaskbarIcon _icon;
     private TrayState? _shownState;
     private string? _shownTip;
     private string? _lastNotifiedOutput;
 
-    public TrayController(ClipstemsEngine engine, Action openSettings, Action quit)
+    public TrayController(ClipstemsEngine engine, Updater updater, Action openSettings, Action quit, Action restartToUpdate)
     {
         _engine = engine;
+        _updater = updater;
+        _restartToUpdate = restartToUpdate;
         _openSettings = openSettings;
         _quit = quit;
         _icon = new TaskbarIcon
@@ -69,6 +73,15 @@ public sealed class TrayController : IDisposable
         _lastNotifiedOutput = outcome.Result.OutputPath;
         _icon.ShowNotification(headline, $"{outcome.Title ?? outcome.ClipName}\n{detail}",
             warning ? NotificationIcon.Warning : NotificationIcon.Info);
+    }
+
+    /// <summary>Says once that a new version is downloaded; it installs at the next restart either way.</summary>
+    public void NotifyUpdateReady()
+    {
+        if (_updater.ReadyVersion is not { } version) return;
+        _lastNotifiedOutput = null; // clicking opens Settings, where About shows the update
+        _icon.ShowNotification("Clipstems update ready",
+            $"Version {version} installs the next time Clipstems restarts, or choose Restart to update in this menu.", NotificationIcon.Info);
     }
 
     public void Dispose() => _icon.Dispose();
@@ -154,6 +167,7 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(pause);
         menu.Items.Add(Item("Settings…", _openSettings));
         menu.Items.Add(new Separator());
+        if (_updater.ReadyVersion is { } version) menu.Items.Add(Item($"Restart to update to {version}", _restartToUpdate));
         menu.Items.Add(Item("Quit Clipstems", _quit));
     }
 

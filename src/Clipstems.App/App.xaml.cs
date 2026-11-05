@@ -24,6 +24,8 @@ public partial class App : Application
     private Microsoft.Extensions.Logging.ILogger? _log;
     private ClipstemsEngine? _engine;
     private TrayController? _tray;
+    private Updater? _updater;
+    private bool _restartForUpdate;
     private SettingsWindow? _settingsWindow;
     private string? _settingsProblem;
 
@@ -73,7 +75,11 @@ public partial class App : Application
         if (StartupRegistration.Apply(settings.StartWithWindows) is { } skipped) _log!.LogInformation("{Why}", skipped);
 
         _engine = new ClipstemsEngine(settings, loggers: _loggers);
-        _tray = new TrayController(_engine, ShowSettings, Quit);
+        var engine = _engine;
+        _updater = new Updater(_loggers!.CreateLogger<Updater>(), () => engine.Settings.AutoUpdate);
+        _tray = new TrayController(_engine, _updater, ShowSettings, Quit, RestartToUpdate);
+        _updater.UpdateReady += (_, _) => Dispatcher.BeginInvoke(() => _tray?.NotifyUpdateReady());
+        _updater.Start();
         _engine.Changed += (_, _) => Dispatcher.BeginInvoke(() => _tray?.Refresh());
         _engine.ClipFinished += (_, outcome) => Dispatcher.BeginInvoke(() => _tray?.NotifyClip(outcome));
         _engine.Start();
@@ -95,6 +101,9 @@ public partial class App : Application
                 if (!Task.Run(async () => await _engine.DisposeAsync()).Wait(TimeSpan.FromSeconds(10)))
                     _log?.LogWarning("Stopping took longer than 10 s; exiting anyway");
             }
+            // After recording has stopped: Velopack's updater waits for this process to end, then installs.
+            _updater?.ApplyOnExit(restart: _restartForUpdate);
+            _updater?.Dispose();
             _log?.LogInformation("Clipstems stopped");
         }
         catch (Exception ex)
@@ -117,7 +126,7 @@ public partial class App : Application
             _settingsWindow.Activate();
             return;
         }
-        var viewModel = new SettingsViewModel(_engine, _settingsStore, _loggers!.CreateLogger<SettingsViewModel>(), _settingsProblem);
+        var viewModel = new SettingsViewModel(_engine, _settingsStore, _updater!, _loggers!.CreateLogger<SettingsViewModel>(), _settingsProblem);
         _settingsProblem = null;
         _settingsWindow = new SettingsWindow(viewModel);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
@@ -126,6 +135,12 @@ public partial class App : Application
     }
 
     private void Quit() => Shutdown();
+
+    private void RestartToUpdate()
+    {
+        _restartForUpdate = true;
+        Shutdown();
+    }
 
     private void StartLogging()
     {
